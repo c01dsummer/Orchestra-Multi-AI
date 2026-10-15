@@ -1,0 +1,231 @@
+name: Orchestra 格式检查
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  format-check:
+    name: 格式检查
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 读取当前仓库
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # out.md 第109行：仅下面四项；没有同步、发布或修改线上设定。
+      - name: 检查表格、技能入口、禁用词、密钥和路径
+        shell: bash
+        env:
+          ORCHESTRA_SCOPE: public
+          # Repository secret；一行一个字面禁用词。缺失/空白直接报红。
+          ORCHESTRA_PRIVATE_WORDS: ${{ secrets.ORCHESTRA_PRIVATE_WORDS }}
+          # Repository variable；必须按路由规则表的正式格式配置，不能自行猜字段。
+          # JSON 对象：规则表相对路径 -> 非空必填 JSON Pointer 数组；支持 *。
+          ORCHESTRA_RULES_REQUIRED_FIELDS: ${{ vars.ORCHESTRA_RULES_REQUIRED_FIELDS }}
+        run: |
+          set -euo pipefail
+          python3 -I - <<'PY'
+          try:
+              import glob
+              import json
+              import os
+              from pathlib import Path
+              import re
+              import subprocess
+              import sys
+              from urllib.parse import unquote, urlsplit
+
+              # All messages are fixed strings: never report content, paths or parser errors.
+              def fail(message):
+                  print('::error::' + message)
+                  raise SystemExit(1)
+
+              scope = os.environ['ORCHESTRA_SCOPE']
+              root = Path.cwd().resolve()
+              words = [w.strip().casefold() for w in
+                       os.environ.get('ORCHESTRA_PRIVATE_WORDS', '').splitlines() if w.strip()]
+              if not words:
+                  fail('禁用词 secret ORCHESTRA_PRIVATE_WORDS 未设置或为空，拒绝放行。')
+
+              try:
+                  names = subprocess.check_output(['git', 'ls-files', '-z'], stderr=subprocess.DEVNULL).decode('utf-8').split('\0')
+                  names = [n for n in names if n]
+                  content = {}
+                  for name in names:
+                      p = root / name
+                      # Scan link text itself; do not read arbitrary files outside checkout.
+                      content[name] = os.readlink(p).encode() if p.is_symlink() else p.read_bytes()
+              except (OSError, UnicodeError, subprocess.SubprocessError):
+                  fail('仓库文件无法读取。')
+
+              def load_json(raw):
+                  def reject_constant(value):
+                      raise ValueError()
+                  return json.loads(raw, parse_constant=reject_constant)
+
+              # 1. JSON tables and required routing fields; field names come from the routing rules table format.
+              tables = {}
+              for name, raw in content.items():
+                  if name.lower().endswith('.json'):
+                      try:
+                          tables[name] = load_json(raw)
+                      except (ValueError, UnicodeError):
+                          fail('表格 JSON 无法读取。')
+              try:
+                  contract = load_json(os.environ.get('ORCHESTRA_RULES_REQUIRED_FIELDS', ''))
+                  if not isinstance(contract, dict) or not contract:
+                      raise ValueError()
+                  for name, pointers in contract.items():
+                      if (not isinstance(name, str) or not name.endswith('.json')
+                              or name not in tables or not isinstance(pointers, list) or not pointers
+                              or any(not isinstance(p, str) or not p.startswith('/') for p in pointers)):
+                          raise ValueError()
+                  if scope == 'config' and 'config/rules.json' not in contract:
+                      raise ValueError()
+                  # Every rules*.json is covered; the contract may also name differently named templates.
+                  known_rules = {n for n in tables if re.search(r'(^|/)rules(?:[._-][^/]*)?\.json$', n)}
+                  if not known_rules.issubset(contract):
+                      raise ValueError()
+              except (ValueError, UnicodeError):
+                  fail('路由规则表必填项配置缺失、无效或未覆盖规则表；请设置仓库变量 ORCHESTRA_RULES_REQUIRED_FIELDS。')
+
+              def require_pointer(value, tokens):
+                  if not tokens:
+                      return value is not None and (not isinstance(value, str) or bool(value.strip())) and value != [] and value != {}
+                  token, *rest = tokens
+                  if token == '*':
+                      children = list(value.values()) if isinstance(value, dict) else value if isinstance(value, list) else []
+                      return bool(children) and all(require_pointer(child, rest) for child in children)
+                  if isinstance(value, dict) and token in value:
+                      return require_pointer(value[token], rest)
+                  if isinstance(value, list) and token.isdigit() and int(token) < len(value):
+                      return require_pointer(value[int(token)], rest)
+                  return False
+
+              for name, pointers in contract.items():
+                  for pointer in pointers:
+                      tokens = [t.replace('~1', '/').replace('~0', '~') for t in pointer[1:].split('/')]
+                      if not require_pointer(tables[name], tokens):
+                          fail('规则表必填项缺失或为空。')
+              print('通过：表格可读、规则表必填项齐全。')
+
+              # 2. SKILL.md front matter and local file references.
+              skills = [n for n in names if Path(n).name == 'SKILL.md']
+              if scope == 'public' and 'SKILL.md' not in skills:
+                  fail('通用技能缺少根目录 SKILL.md。')
+
+              def front_value(lines, key):
+                  matches = [(i, re.fullmatch(re.escape(key) + r':\s*(.*)', line))
+                             for i, line in enumerate(lines)]
+                  matches = [(i, m.group(1).strip()) for i, m in matches if m]
+                  if len(matches) != 1:
+                      return ''
+                  index, value = matches[0]
+                  if value in ('>', '>-', '>+', '|', '|-', '|+'):
+                      parts = []
+                      for line in lines[index + 1:]:
+                          if line and not line[0].isspace():
+                              break
+                          parts.append(line.strip())
+                      return ' '.join(parts).strip()
+                  if value.startswith('#') or value.casefold() in ('null', '~'):
+                      return ''
+                  value = re.sub(r'\s+#.*$', '', value)
+                  return value.strip('\"\'').strip()
+
+              def local_reference_exists(skill, reference):
+                  reference = reference.strip()
+                  if reference.startswith('<') and reference.endswith('>'):
+                      reference = reference[1:-1]
+                  reference = unquote(reference)
+                  if not reference or reference.startswith('#') or urlsplit(reference).scheme:
+                      return True
+                  reference = reference.split('#', 1)[0].split('?', 1)[0]
+                  # The installed config is external; check the corresponding fictitious example.
+                  if scope == 'public' and reference.startswith('config/'):
+                      reference = 'examples/' + reference[len('config/'):]
+                  reference = re.sub(r'<[^>]+>|〈[^〉]+〉|\$\{[^}]+\}', '*', reference)
+                  candidate = root / Path(skill).parent / reference
+                  # Only files/dirs actually present in the tracked snapshot satisfy references.
+                  for match in glob.glob(str(candidate)):
+                      target = Path(match).resolve()
+                      if not target.is_relative_to(root):
+                          continue
+                      rel = target.relative_to(root).as_posix()
+                      if rel in content or any(n.startswith(rel.rstrip('/') + '/') for n in names):
+                          return True
+                  return False
+
+              for skill in skills:
+                  try:
+                      text = content[skill].decode('utf-8').lstrip('\ufeff')
+                  except UnicodeError:
+                      fail('SKILL.md 无法读取。')
+                  lines = text.splitlines()
+                  if not lines or lines[0] != '---' or '---' not in lines[1:]:
+                      fail('SKILL.md 开头缺少 front matter。')
+                  end = lines.index('---', 1)
+                  header = lines[1:end]
+                  if not front_value(header, 'name') or not front_value(header, 'description'):
+                      fail('SKILL.md 开头缺少非空 name 或 description。')
+                  body = '\n'.join(lines[end + 1:])
+                  # Inline Markdown links/images, reference-link definitions, and code-span file names.
+                  refs = re.findall(r'!?\[[^\]]*\]\(\s*(<[^>]+>|[^\s)]+)', body)
+                  refs += re.findall(r'^\s*\[[^\]]+\]:\s*(<[^>]+>|\S+)', body, re.M)
+                  refs += [r for r in re.findall(r'`([^`\n]+)`', body)
+                           if re.fullmatch(r'[^\s`]+\.(?:md|json|ya?ml|sh|py|txt|toml)(?:#[^\s]*)?|[^\s`]+/', r)]
+                  # Also cover plain names, such as CHANGELOG.md in the plan's sample heading.
+                  prose = re.sub(r'!?\[[^\]]*\]\([^\n)]*\)', '', body)
+                  prose = re.sub(r'^\s*\[[^\]]+\]:[^\n]*', '', prose, flags=re.M)
+                  prose = re.sub(r'`[^`\n]+`|(?:https?://|mailto:)\S+', '', prose)
+                  refs += re.findall(r'(?<![A-Za-z0-9_/.:~%-])(?:[A-Za-z0-9_.-]+/)*(?:<[^>\n]+>|〈[^〉\n]+〉|[A-Za-z0-9_.-]+)\.(?:md|json|ya?ml|sh|py|txt|toml)\b', prose)
+                  if any(not local_reference_exists(skill, ref) for ref in refs):
+                      fail('SKILL.md 提到的本地文件或目录不存在。')
+              print('通过：本仓库技能的开头与文件引用。' if skills else '不适用：配置仓库没有 SKILL.md，技能正本在通用仓库。')
+
+              # 3. Private words only in the generic portion. No matches or filenames are logged.
+              for name, raw in content.items():
+                  if scope == 'config' and name.startswith('config/'):
+                      continue
+                  if any(w in name.casefold() or w in raw.decode('utf-8', errors='replace').casefold() for w in words):
+                      fail('通用部分命中禁用词；内容不输出。')
+              print('通过：通用部分无禁用词。')
+
+              # 4. Key-like strings and machine paths in both repositories, including config/profiles/.
+              key_patterns = [
+                  r'-----BEGIN (?:RSA |EC |OPENSSH |DSA |ENCRYPTED )?PRIVATE KEY-----',
+                  r'\bgh[pousr]_' + r'[A-Za-z0-9]{20,}\b',
+                  r'\bgithub_' + r'pat_[A-Za-z0-9_]{20,}\b',
+                  r'\b(?:AKIA|ASIA)' + r'[A-Z0-9]{16}\b',
+                  r'\bsk-' + r'[A-Za-z0-9_-]{20,}\b',
+                  r'\bAIza' + r'[A-Za-z0-9_-]{30,}\b',
+                  r'\bxox[baprs]-' + r'[A-Za-z0-9-]{16,}\b',
+                  r'(?i)\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|password|secret)\b[\"\']?\s*[:=]\s*[\"\'][A-Za-z0-9+/=_-]{16,}[\"\']',
+                  r'(?i)\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|password|secret)\b\s*[:=]\s*[A-Za-z0-9+/=_-]{16,}(?=\s|$)',
+              ]
+              path_patterns = [
+                  r'(?:/home|/Users|/workspace|/root|/mnt|/Volumes)/[A-Za-z0-9_.-]+(?:/[^\s`\"\'<>]*)?',
+                  r'(?i)\b[A-Z]:[\\/][^\s`\"\'<>]+',
+                  r'~[\\/][^\s`\"\'<>]+',
+                  r'\\\\[A-Za-z0-9_.-]+\\[^\s`\"\'<>]+',
+              ]
+              keys = [re.compile(p) for p in key_patterns]
+              paths = [re.compile(p) for p in path_patterns]
+              for name, raw in content.items():
+                  text = name + '\n' + raw.decode('utf-8', errors='replace')
+                  if any(p.search(text) for p in keys):
+                      fail('发现像密钥的字符串；内容不输出。')
+                  if any(p.search(text) for p in paths):
+                      fail('发现本机路径；内容不输出。')
+              print('通过：无匹配的密钥形态或本机路径。')
+          except Exception:
+              print("::error::检查无法完成；异常内容不输出。")
+              raise SystemExit(1)
+          PY
