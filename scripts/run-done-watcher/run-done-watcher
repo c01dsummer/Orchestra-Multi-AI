@@ -48,6 +48,10 @@ def atomic_json(path, value):
         os.close(fd)
 
 
+class CursorHistoryConflict(ValueError):
+    """已有游标时拒绝首次历史扫描参数。"""
+
+
 class PendingHistoryConflict(ValueError):
     """固定的安全启动错误，不携带外部输入。"""
 
@@ -109,6 +113,8 @@ class Watcher:
                 raise ValueError("--start-at-end 只允许用于尚无游标的新状态")
             if args.allow_history and self.get("start_at_end_pending") is not None:
                 raise PendingHistoryConflict()
+            if args.allow_history and self.get("cursor") is not None:
+                raise CursorHistoryConflict()
             if args.start_at_end and args.allow_history:
                 raise ValueError("接入边界参数互斥")
             if (mode == "http" and self.get("cursor") is None
@@ -487,6 +493,9 @@ def main(sender=None):
                 time.sleep(min(0.2, max(0, deadline - time.monotonic())))
         watcher.heartbeat()
         return 0
+    except CursorHistoryConflict:
+        print("watcher 拒绝启动：已有游标，--allow-history 只用于首次接入；补扫须使用人工核准的新独立状态目录。", file=sys.stderr)
+        return 1
     except PendingHistoryConflict:
         print("watcher 拒绝启动：已有 start_at_end_pending 末尾接入意图，不能使用 --allow-history。"
               "请先人工核对历史回报与接入边界；继续末尾接入请去掉 --allow-history，"
