@@ -17,7 +17,7 @@ if [ -n "$FILE" ]; then LOG=$FILE; else orchestra_config; fi
 [ -f "$LOG" ] || { echo "no log at $LOG" >&2; exit 1; }
 if [ -n "$RECENT" ]; then
   [[ "$N" =~ ^[1-9][0-9]*$ ]] && [ -z "$ID" ] || { usage >&2; exit 2; }
-  tail -n "$N" "$LOG" | jq -r '[.run_id,.engine,(.actual_models|join(",")),("rc="+(.exit_code|tostring)),(.duration_s|tostring)+"s",.agent,.task,(.role // ""),(.work_id // "")]|@tsv'
+  tail -n "$N" "$LOG" | jq -r '[.run_id // "?",.engine // "?",((.actual_models // [])|join(",")),("rc="+(.exit_code // "?"|tostring)),(.duration_s // "?"|tostring)+"s",.agent // "",.task // "",(.role // ""),(.work_id // "")]|@tsv'
   exit $?
 fi
 [ -n "$ID" ] || { usage >&2; exit 2; }

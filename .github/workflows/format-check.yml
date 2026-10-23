@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-      # out.md 第109行：仅下面四项；没有同步、发布或修改线上设定。
+      # 仅检查格式与公开内容，不同步或发布。
       - name: 检查表格、技能入口、禁用词、密钥和路径
         shell: bash
         env:
@@ -198,6 +198,13 @@ jobs:
                       fail('通用部分命中禁用词；内容不输出。')
               print('通过：通用部分无禁用词。')
 
+              # Keep internal review shorthand and task references out of public files.
+              internal = re.compile(r'\b(?:FAL' + r'-[0-9]+|TASK' + r'[0-9]+|[BRN]' + r'[0-9]+)\b|plan' + r' [0-9]|commit' + r'-options|C' + r'NOF|out' + r'\.md', re.I)
+              for name, raw in content.items():
+                  if internal.search(name + '\n' + raw.decode('utf-8', errors='replace')):
+                      fail('公开文件含内部任务或评审标记。')
+              print('通过：公开文件无内部任务、文档名或评审标记。')
+
               # 4. Key-like strings and machine paths in both repositories, including config/profiles/.
               key_patterns = [
                   r'-----BEGIN (?:RSA |EC |OPENSSH |DSA |ENCRYPTED )?PRIVATE KEY-----',
@@ -229,3 +236,6 @@ jobs:
               print("::error::检查无法完成；异常内容不输出。")
               raise SystemExit(1)
           PY
+      - name: 离线工具回归自测
+        shell: bash
+        run: PYTHONDONTWRITEBYTECODE=1 python3 scripts/selftest.py

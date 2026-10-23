@@ -55,8 +55,8 @@ def load():
         "CODEX_SESSIONS": path(engines.get("codex", {}).get("sessions_dir")) if engines.get("codex", {}).get("sessions_dir") else "",
         "CLAUDE_ENV_SCRIPT": path(engines.get("claude", {}).get("environment_script")) if engines.get("claude", {}).get("environment_script") else "",
         "DEEPSEEK_PROFILE": engines.get("deepseek", {}).get("profile", "headless"),
-        "DEEPSEEK_PROVIDER": engines.get("deepseek", {}).get("provider", "deepseek-official"),
-        "DEEPSEEK_MODEL_ID": engines.get("deepseek", {}).get("model_id", "agent-default-model"),
+        "DEEPSEEK_PROVIDER": engines.get("deepseek", {}).get("provider", "my-provider"),
+        "DEEPSEEK_MODEL_ID": engines.get("deepseek", {}).get("model_id", "my-model"),
     }
     for engine, command in (("claude", "claude"), ("codex", "codex"), ("deepseek", "dsh")):
         settings = engines.get(engine, {})

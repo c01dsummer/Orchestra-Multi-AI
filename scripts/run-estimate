@@ -144,7 +144,7 @@ def main(argv):
             "（exit_code 为 0 且有 duration_s），无法估计", 1)
 
     med, p80 = quantile(secs, 0.5), quantile(secs, 0.8)
-    head = "预计不到 1 分钟" if med < 60 else f"预计约 {half_up(med / 60)} 分钟"
+    head = "预计不到 1 分钟" if half_up(med) < 60 else f"预计约 {half_up(med / 60)} 分钟"
     cond = " ".join([f"engine={show(args['engine'])}"] +
                     [("task~" if k == "task" else k + "=") + show(args[k]) for k in keys])
     note = "；样本少，仅供参考" if len(secs) < MIN_RUNS else ""

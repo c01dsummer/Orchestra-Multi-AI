@@ -25,7 +25,7 @@ Orchestra-Multi-AI/         # 通用仓库；装到本机后文件夹名为 orch
 ├─ routing/                 # 规则表格式说明＋空白模板
 ├─ process/                 # 派工、交接、复审、合并、改规矩、同步，每个流程一份
 ├─ examples/                # 虚构团队，演示 config/ 怎么填
-├─ scripts/                 # 模型调用、估时、运行核对工具及说明
+├─ scripts/                 # 模型调用、估时、运行核对工具及说明；安装/同步/导出脚本待实现
 └─ .github/                 # 自动检查（CI）设置
 ```
 
@@ -61,17 +61,17 @@ config/                      # 私有配置仓库内；装到本机 orchestra/co
 
 1. 整个文件夹放进助手能读到的技能目录，命名 `orchestra`。
 2. 把你的私有配置仓库放到同一文件夹下的 `config/`；可以以 `examples/` 为起点，改成你自己的。
-3. 运行 `scripts/check.sh`，全部通过再用。
+3. 先确认 CI 格式检查通过，再运行 `PYTHONDONTWRITEBYTECODE=1 python3 scripts/selftest.py` 做离线工具自测；通用安装检查脚本仍待实现。
 4. 每个助手的设定里加一句：开工前先读技能 `orchestra`。
 5. 冒烟测试：跑一次最简单的试用，确认助手真会读技能；让它报出角色和配置版本号，对得上就算装好。
 
-分享给别人：发 `scripts/` 生成的导出包（TODO：确认导出脚本文件名），只含通用部分。没有模型调用程序的，规则表就当选模型的参考。
+分享给别人：只分发通用部分，排除个人配置与运行数据。安装、通用检查、同步和导出脚本尚未实现，目前用 CI 做格式检查。没有模型调用程序的，规则表就当选模型的参考。
 
 ## 模型工具：安装、配置与第一次离线运行
 
-依赖 Bash、Python 3、jq、GNU coreutils。下载仓库后直接运行 scripts/ 下的三个入口，无需安装到系统目录；如需加入 PATH，把整个 scripts 目录加入 PATH，保留两个共享文件。实际调用另需自己安装并认证对应 CLI；详细配置和兼容差异见 [scripts/CONFIG.md](scripts/CONFIG.md)。
+依赖 Bash 4.4+、Python 3、jq、GNU coreutils、Git 和常见工具 awk、sed、grep、find。下载仓库后直接运行 scripts/ 下的三个入口，无需安装到系统目录；如需加入 PATH，把整个 scripts 目录加入 PATH，保留两个共享文件。claude、codex、dsh 是示例 CLI 命令，实际调用前须自行安装并认证，或将 command 换成已安装的兼容程序。详细配置和兼容差异见 [scripts/CONFIG.md](scripts/CONFIG.md)。
 
-复制 examples/runtime.json 和 examples/review-policy.json 到自己的配置目录，再按虚构团队示例修改路径、引擎命令、默认模型/强度和 agent 名单；设置 ORCHESTRA_CONFIG 指向自己的 runtime.json。配置不存密钥，认证由引擎或使用者环境提供。rules_file 指向配对表，routes 仍由人选择、传参，不自动派工。
+复制 examples/runtime.json 和 examples/review-policy.json 到自己的配置目录，再按虚构团队示例修改路径、引擎命令、默认模型/强度；agents 名单仅供人读，不参与校验，任意非空 --agent 都可记账。设置 ORCHESTRA_CONFIG 指向自己的 runtime.json。dsh 为开源 CLI 示例，provider/model_id 的 my-provider/my-model 是占位符，使用模型补丁前换成自己 profile 中的值；模型名由服务支持情况决定，例如 deepseek-flash，不限定这一种。配置不存密钥，认证由引擎或使用者环境提供。rules_file 指向配对表，routes 仍由人选择、传参，不自动派工。
 
 以下在仓库根目录执行，不需要真实账号，不调用模型；临时目录在当前仓库内，最后可自行删除：
 
@@ -87,6 +87,31 @@ scripts/check-run --file "$scratch/runs.jsonl" demo-001
 ```
 
 预期估时中位数为 40 秒，核对输出含 `OK: output exists`。实际运行时指定 --engine、--agent、--task 和提示词，使用 --role code|review、--work-id 把同一工作关联起来；其余参数见 --help。run-model 的 --commit 会实际暂存和提交，只在明确授权后使用。
+
+以下完整演示复制配置、替换 command 和记账，全程仅运行假引擎：
+
+```bash
+demo=$(mktemp -d ./orchestra-demo.XXXXXX)
+cp examples/runtime.json examples/review-policy.json "$demo/"
+cat > "$demo/fake-engine.py" <<'PY'
+import json
+print(json.dumps({"result": "offline demo", "model": "demo-model"}))
+PY
+python3 - "$demo" <<'PY'
+import json, sys
+from pathlib import Path
+folder = Path(sys.argv[1]).resolve()
+file = folder / "runtime.json"
+config = json.loads(file.read_text())
+config["engines"]["claude"]["command"] = [sys.executable, str(folder / "fake-engine.py")]
+file.write_text(json.dumps(config))
+PY
+export ORCHESTRA_CONFIG="$PWD/$demo/runtime.json"
+scripts/run-model --engine claude --agent demo-worker --task demo --cwd "$demo" --prompt "offline demo"
+scripts/check-run --recent 1
+```
+
+Claude 默认允许 cwd 的文件工具及 CONFIG 列出的 Bash 命令；--allow-web 独立追加网页工具。--read-dir/--write-dir 是额外授权，不是只读隔离或文件系统沙箱；Bash 命令具有运行用户的系统权限，需要隔离时应在外部 OS 沙箱运行。
 
 ## 新增或修改技能：PR 流程（Change Workflow）
 
