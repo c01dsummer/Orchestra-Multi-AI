@@ -26,8 +26,8 @@ LOADER = importlib.machinery.SourceFileLoader("run_done_watcher", str(SCRIPT))
 SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
 MODULE = importlib.util.module_from_spec(SPEC)
 LOADER.exec_module(MODULE)
-URL_ENV = "FAL74_SELFTEST_URL"
-OTHER_ENV = "FAL74_SELFTEST_OTHER_URL"
+URL_ENV = "RDW_SELFTEST_URL"
+OTHER_ENV = "RDW_SELFTEST_OTHER_URL"
 
 
 def event(run_id, agent="示例助手甲", exit_code=0):
@@ -63,7 +63,7 @@ class WatcherTest(unittest.TestCase):
         self.addCleanup(self.socket_guard.stop)
         self.server = FakeSender()  # 仅保留旧测试属性名；它是普通可调用对象，不是服务。
         self.url = "https://selftest.invalid/test-only-url"
-        self.temp = tempfile.TemporaryDirectory(prefix="fal74-selftest-", dir=SCRIPT.parent)
+        self.temp = tempfile.TemporaryDirectory(prefix="rdw-selftest-", dir=SCRIPT.parent)
         self.root = Path(self.temp.name)
         self.ledger = self.root / "ledger.jsonl"
         self.ledger.write_bytes(b"")
@@ -301,16 +301,16 @@ class WatcherTest(unittest.TestCase):
         self.assertEqual(self.rows(), [("unreachable", "pending", 1)])
 
     def configure_headers(self, body=False):
-        route = {"url_env": URL_ENV, "headers_env": "FAL74_TEST_HEADERS"}
+        route = {"url_env": URL_ENV, "headers_env": "RDW_TEST_HEADERS"}
         if body:
-            route["body_template_env"] = "FAL74_TEST_BODY"
+            route["body_template_env"] = "RDW_TEST_BODY"
         self.config.write_text(json.dumps({"示例助手甲": route}), encoding="utf-8")
-        self.env["FAL74_TEST_HEADERS"] = json.dumps({"Authorization": "Bearer fake-secret-only",
+        self.env["RDW_TEST_HEADERS"] = json.dumps({"Authorization": "Bearer fake-secret-only",
                                                      "X-Test-Key": "fake-second-secret"})
 
     def test_18_configured_headers_and_body_never_saved(self):
         self.configure_headers(body=True)
-        self.env["FAL74_TEST_BODY"] = json.dumps({"data": "$event", "id": "$run_id",
+        self.env["RDW_TEST_BODY"] = json.dumps({"data": "$event", "id": "$run_id",
                                                   "label": "本机测试", "list": ["$exit_code"]})
         self.append(event("configured", exit_code=1))
         self.run_once("--allow-history")
@@ -336,9 +336,9 @@ class WatcherTest(unittest.TestCase):
                     '{"Content-Length":"0"}', '{"Authorization":23}'):
             environment = dict(self.env)
             if raw is None:
-                del environment["FAL74_TEST_HEADERS"]
+                del environment["RDW_TEST_HEADERS"]
             else:
-                environment["FAL74_TEST_HEADERS"] = raw
+                environment["RDW_TEST_HEADERS"] = raw
             self.run_once(expected=2, environment=environment)
             with contextlib.closing(sqlite3.connect(self.state / "state.sqlite3")) as db, db:
                 db.execute("UPDATE events SET next_attempt=0")
@@ -417,6 +417,10 @@ class WatcherTest(unittest.TestCase):
                 *[x for x in extra if x != "--production"]])
         result = subprocess.CompletedProcess([], code, stdout.getvalue(), stderr.getvalue())
         self.assertEqual(result.returncode, expected, result.stderr)
+        if expected == 2:
+            self.assertEqual(result.stdout, "")
+            self.assertEqual(result.stderr.strip(), "对账失败：文件、配置或时间范围无效；未输出原文。")
+            return None
         return json.loads(result.stdout)
 
     def test_23_reconcile_twelve_events_all_routes(self):
@@ -461,10 +465,10 @@ class WatcherTest(unittest.TestCase):
         self.append(event("contract"))
         self.run_once("--allow-history", expected=2)  # 模板未注入，不发送
         self.assertEqual(self.server.received, [])
-        self.env["FAL74_TEST_BODY"] = "not-json"
+        self.env["RDW_TEST_BODY"] = "not-json"
         for body, response in (("not-json", 200), (json.dumps("$event"),
                                urllib.error.HTTPError(self.url, 401, "fake-secret-only", {}, None))):
-            self.env["FAL74_TEST_BODY"] = body
+            self.env["RDW_TEST_BODY"] = body
             self.server.responses = [response]
             with contextlib.closing(sqlite3.connect(self.state / "state.sqlite3")) as db, db:
                 db.execute("UPDATE events SET next_attempt=0")
@@ -507,7 +511,7 @@ class WatcherTest(unittest.TestCase):
 
     def test_31_unknown_template_pending_and_escape(self):
         self.configure_headers(body=True)
-        self.env["FAL74_TEST_BODY"] = json.dumps({"nested": ["$unknown"]})
+        self.env["RDW_TEST_BODY"] = json.dumps({"nested": ["$unknown"]})
         self.append(event("unknown"))
         self.run_once("--allow-history", expected=2)
         self.assertEqual(self.rows(), [("unknown", "pending", 1)])
@@ -837,6 +841,41 @@ class WatcherTest(unittest.TestCase):
         self.assertEqual(report["agents"]["示例助手甲旧名"]["matched"], 3)
         policy.write_text(json.dumps({"aliases": {}, "required_agents": ["缺席示例助手"]}))
         self.assertIn("每助手事件数不足", self.reconcile(1, *args, "--policy", str(policy))["gate_errors"])
+
+    def test_58_policy_rejects_self_alias(self):
+        self.assert_invalid_policy({"示例助手甲": "示例助手甲"}, 2)
+
+    def test_59_policy_rejects_alias_chain(self):
+        self.assert_invalid_policy({"示例助手甲旧名": "示例助手甲", "示例助手甲": "示例助手乙"}, 2)
+
+    def test_60_policy_rejects_missing_target(self):
+        self.assert_invalid_policy({"示例助手甲旧名": "不存在的示例助手"}, 1)
+
+    def test_61_policy_rejects_different_route(self):
+        self.assert_invalid_policy({"示例助手甲旧名": "示例助手乙"}, 1)
+
+    def test_62_policy_rejects_empty_required(self):
+        self.assert_invalid_policy({}, 2, required=[])
+
+    def assert_invalid_policy(self, aliases, expected, required=None):
+        args = self.production_fixture()
+        policy = self.root / "invalid-policy.json"
+        policy.write_text(json.dumps({"aliases": aliases,
+            "required_agents": ["示例助手甲", "示例助手乙", "示例助手丙"] if required is None else required}))
+        report = self.reconcile(expected, *args, "--policy", str(policy))
+        if expected == 1:
+            self.assertFalse(report["acceptance"])
+            self.assertIn("配置须覆盖必需助手及同路由别名", report["gate_errors"])
+
+    def test_63_reconcile_cli_requires_policy(self):
+        result = subprocess.run([sys.executable, str(SCRIPT.with_name("reconcile.py")),
+            "--ledger", str(self.ledger), "--log", str(self.state / "events.jsonl"),
+            "--config", str(self.config), "--diagnostic"],
+            env={"PATH": os.defpath, "PYTHONDONTWRITEBYTECODE": "1"},
+            capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--policy", result.stderr)
+        self.assertEqual(result.stdout, "")
 
 
 if __name__ == "__main__":
