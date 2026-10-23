@@ -1,0 +1,18 @@
+{
+  "示例助手甲": {
+    "url_env": "EXAMPLE_A_WEBHOOK_URL",
+    "headers_env": "EXAMPLE_A_WEBHOOK_HEADERS_JSON"
+  },
+  "示例助手甲旧名": {
+    "url_env": "EXAMPLE_A_WEBHOOK_URL",
+    "headers_env": "EXAMPLE_A_WEBHOOK_HEADERS_JSON"
+  },
+  "示例助手乙": {
+    "url_env": "EXAMPLE_B_WEBHOOK_URL",
+    "headers_env": "EXAMPLE_B_WEBHOOK_HEADERS_JSON"
+  },
+  "示例助手丙": {
+    "url_env": "EXAMPLE_C_WEBHOOK_URL",
+    "headers_env": "EXAMPLE_C_WEBHOOK_HEADERS_JSON"
+  }
+}
