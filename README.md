@@ -2,7 +2,7 @@
 
 > 通用版技能仓库 · A generic skill for multi-assistant collaboration
 >
-> 本仓库只放通用技能，不含任何人的助手名单、项目、账号或密钥。个人配置放在你自己的私有仓库，不进本仓库。
+> 本仓库放通用技能与可配置模型工具，不含任何人的助手名单、项目、账号或密钥。个人配置放在你自己的私有仓库，不进本仓库。
 
 ## 项目是什么（What This Is）
 
@@ -25,7 +25,7 @@ Orchestra-Multi-AI/         # 通用仓库；装到本机后文件夹名为 orch
 ├─ routing/                 # 规则表格式说明＋空白模板
 ├─ process/                 # 派工、交接、复审、合并、改规矩、同步，每个流程一份
 ├─ examples/                # 虚构团队，演示 config/ 怎么填
-├─ scripts/                 # 安装、检查、同步、打导出包（只含通用部分）
+├─ scripts/                 # 模型调用、估时、运行核对工具及说明
 └─ .github/                 # 自动检查（CI）设置
 ```
 
@@ -67,6 +67,27 @@ config/                      # 私有配置仓库内；装到本机 orchestra/co
 
 分享给别人：发 `scripts/` 生成的导出包（TODO：确认导出脚本文件名），只含通用部分。没有模型调用程序的，规则表就当选模型的参考。
 
+## 模型工具：安装、配置与第一次离线运行
+
+依赖 Bash、Python 3、jq、GNU coreutils。下载仓库后直接运行 scripts/ 下的三个入口，无需安装到系统目录；如需加入 PATH，把整个 scripts 目录加入 PATH，保留两个共享文件。实际调用另需自己安装并认证对应 CLI；详细配置和兼容差异见 [scripts/CONFIG.md](scripts/CONFIG.md)。
+
+复制 examples/runtime.json 和 examples/review-policy.json 到自己的配置目录，再按虚构团队示例修改路径、引擎命令、默认模型/强度和 agent 名单；设置 ORCHESTRA_CONFIG 指向自己的 runtime.json。配置不存密钥，认证由引擎或使用者环境提供。rules_file 指向配对表，routes 仍由人选择、传参，不自动派工。
+
+以下在仓库根目录执行，不需要真实账号，不调用模型；临时目录在当前仓库内，最后可自行删除：
+
+```bash
+scripts/run-model --help
+scripts/run-estimate --help
+scripts/check-run --help
+scratch=$(mktemp -d ./orchestra-offline.XXXXXX)
+cp examples/runs.jsonl examples/output.txt "$scratch/"
+scripts/run-estimate --engine claude --file "$scratch/runs.jsonl"
+scripts/check-run --file "$scratch/runs.jsonl" --recent 3
+scripts/check-run --file "$scratch/runs.jsonl" demo-001
+```
+
+预期估时中位数为 40 秒，核对输出含 `OK: output exists`。实际运行时指定 --engine、--agent、--task 和提示词，使用 --role code|review、--work-id 把同一工作关联起来；其余参数见 --help。run-model 的 --commit 会实际暂存和提交，只在明确授权后使用。
+
 ## 新增或修改技能：PR 流程（Change Workflow）
 
 几个词：分支是 PR 里那份草稿副本；分支保护是 GitHub 上的开关，规定 `main` 只能经 PR 改、不许强推（force push）；CI 是每次提 PR 时自动跑的检查。
@@ -107,7 +128,7 @@ CI 格式检查查四样：
 | 你的配置 | 你的私有配置仓库的 `main` | 同一文件夹里的 `config/` | 同上 |
 | 规则表 | `config/rules.json` | 模型调用程序只读的本机规则表（TODO：确认同步目标路径） | 同上 |
 | 线上设定 | `config/profiles/` | 各助手的线上设定 | 调度角色全文写入，使用者确认 |
-| 模型调用程序代码 | 不进仓库 | — | 开发角色写，先备份、每家引擎试跑再装 |
+| 模型调用程序代码 | 本仓库 scripts/ | 使用者选择的工具目录 | 开发角色维护，安装前备份并验证 |
 
 ### 助手设定怎么管（Assistant Profiles）
 

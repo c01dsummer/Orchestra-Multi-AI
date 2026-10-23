@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -uo pipefail
+usage(){ echo 'usage: check-run [--file LOG] <run_id> | check-run [--file LOG] --recent [N]'; }
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd) || exit 2
+. "$SCRIPT_DIR/orchestra-common.sh"
+FILE=; ID=; RECENT=; N=10
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage; exit 0;;
+    --file) [ $# -ge 2 ] || { usage >&2; exit 2; }; FILE=$2; shift 2;;
+    --recent) RECENT=1; shift; if [ $# -gt 0 ] && [[ "$1" != --* ]]; then N=$1; shift; fi;;
+    --*) usage >&2; exit 2;;
+    *) [ -z "$ID" ] || { usage >&2; exit 2; }; ID=$1; shift;;
+  esac
+done
+if [ -n "$FILE" ]; then LOG=$FILE; else orchestra_config; fi
+[ -f "$LOG" ] || { echo "no log at $LOG" >&2; exit 1; }
+if [ -n "$RECENT" ]; then
+  [[ "$N" =~ ^[1-9][0-9]*$ ]] && [ -z "$ID" ] || { usage >&2; exit 2; }
+  tail -n "$N" "$LOG" | jq -r '[.run_id,.engine,(.actual_models|join(",")),("rc="+(.exit_code|tostring)),(.duration_s|tostring)+"s",.agent,.task,(.role // ""),(.work_id // "")]|@tsv'
+  exit $?
+fi
+[ -n "$ID" ] || { usage >&2; exit 2; }
+L=$(jq -c --arg id "$ID" 'select(.run_id==$id)' "$LOG" | tail -1) || exit 2
+[ -n "$L" ] || { echo "run $ID not found" >&2; exit 1; }
+echo "$L" | jq .
+O=$(echo "$L" | jq -r .output_path)
+# Relative artifact paths are relative to the ledger, independent of the caller's cwd.
+[[ "$O" = /* ]] || O=$(dirname -- "$LOG")/$O
+[ -f "$O" ] && echo "OK: output exists ($O, $(wc -c <"$O") bytes)" || { echo "MISSING output: $O" >&2; exit 3; }

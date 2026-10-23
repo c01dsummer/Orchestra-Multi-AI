@@ -1,0 +1,426 @@
+#!/usr/bin/env bash
+# run-model: configurable wrapper for model calls and run accounting.
+set -uo pipefail
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd) || exit 2
+. "$SCRIPT_DIR/orchestra-common.sh"
+usage(){ cat >&2 <<U
+Usage: run-model --engine claude|codex|deepseek [--model M] [--effort E] --agent NAME --task LABEL
+                 [--role code|review|other] [--work-id ID] [--commit TITLE]
+                 [--cwd DIR] [--read-dir DIR]... [--write-dir DIR]... [--sandbox read-only|workspace-write]
+                 (--prompt "..." | --prompt-file F | prompt on stdin)
+  --model M        deepseek: only deepseek-flash|deepseek-v4-pro, applied via a dsh config --patch written to the run
+                   dir; omit for the profile default. --effort: claude/codex only
+  --role R         code|review|other; logged as "role" (default null)
+  --work-id ID     task identifier; logged as "work_id" (default null). With --role review the run is refused (exit 2)
+                   if this engine has a --role code run for ID in runs.jsonl, or ${RULES:-configured rules_file} does not allow it
+  --commit TITLE   after the engine exits, git add -A and commit in the repo of --cwd as TITLE plus "Run-Id:" and
+                   "Engine:" trailers ("[未完成 exit=N] TITLE" if the engine exited N, not 0); repo hooks are not run.
+                   Needs a commit at HEAD and a clean work tree (unless a merge is in progress); not with --role
+                   review. Logged as "commits" (first-parent commits made during the run) and "commit_note" (why
+                   nothing was committed, or the git error); both null without --commit
+  --allow-web      claude only: also allow WebSearch and WebFetch
+  --read-dir DIR   (repeatable) extra dir the model may read.  claude: --add-dir + allow Read/Glob/Grep(//DIR/**)
+                   codex: no-op (codex sandbox can already read the whole filesystem; logged only) | deepseek: rejected
+  --write-dir DIR  (repeatable) extra dir the model may read+write. claude: --add-dir + Read/Glob/Grep/Edit/Write(//DIR/**)
+                   codex: --add-dir DIR (implies --sandbox workspace-write) | deepseek: rejected
+  --sandbox MODE   codex: -s MODE (default: codex config default, read-only); deepseek: DSH_PERMISSION_MODE=MODE
+                   (default: profile default, workspace-write); claude: rejected (use --write-dir)
+  Configuration: ORCHESTRA_CONFIG JSON; ORCHESTRA_LOG_DIR and ORCHESTRA_RULES override paths.
+  Credentials must already be available to the configured engine command.
+  All engines run non-interactively: claude -p --permission-prompts none (unlisted actions denied, no bypass);
+  codex -a never; deepseek headless.
+U
+return "${1:-2}"; }
+READ_DIRS=() WRITE_DIRS=() SANDBOX=
+ENGINE= MODEL= EFFORT= AGENT= TASK= CWD=$PWD PROMPT= PFILE= HAVEP=0
+ROLE= WORK_ID= CTITLE= HAVEC=0
+while [ $# -gt 0 ]; do
+  # (TASK7) an option that takes a value, given as the last argument: exit 2. Before, shift 2 failed and the loop never
+  # ended. --commit has its own check below, with its own message.
+  case "$1" in --engine|--model|--effort|--agent|--task|--cwd|--read-dir|--write-dir|--sandbox|--role|--work-id|--prompt|--prompt-file)
+    [ $# -ge 2 ] || { echo "run-model: $1 needs a value, but it is the last argument" >&2; exit 2; };; esac
+  case "$1" in
+  --engine) ENGINE=${2-};shift 2;; --model) MODEL=${2-};shift 2;; --effort) EFFORT=${2-};shift 2;;
+  --agent) AGENT=${2-};shift 2;; --task) TASK=${2-};shift 2;; --cwd) CWD=${2-};shift 2;;
+  --read-dir) READ_DIRS+=("${2-}");shift 2;; --write-dir) WRITE_DIRS+=("${2-}");shift 2;; --sandbox) SANDBOX=${2-};shift 2;;
+  --allow-web) ALLOW_WEB=1;shift;;
+  --role) ROLE=${2-};shift 2;; --work-id) WORK_ID=${2-};shift 2;;
+  --commit) [ $# -ge 2 ] || { echo "run-model: --commit needs a title, but it is the last argument" >&2; exit 2; }
+    CTITLE=${2-};HAVEC=1;shift 2;;
+  --prompt) PROMPT=${2-};HAVEP=1;shift 2;; --prompt-file) PFILE=${2-};shift 2;;
+  -h|--help) usage 0; exit 0;; *) echo "run-model: unknown arg: $1" >&2; usage; exit 2;; esac; done
+orchestra_config
+case "$ENGINE" in claude|codex|deepseek);; *) echo "run-model: --engine required (claude|codex|deepseek)" >&2; usage; exit 2;; esac
+case "$ENGINE" in
+  claude) MODEL=${MODEL:-$CLAUDE_MODEL}; EFFORT=${EFFORT:-$CLAUDE_EFFORT};;
+  codex) MODEL=${MODEL:-$CODEX_MODEL}; EFFORT=${EFFORT:-$CODEX_EFFORT};;
+  deepseek) MODEL=${MODEL:-$DEEPSEEK_MODEL}; EFFORT=${EFFORT:-$DEEPSEEK_EFFORT};;
+esac
+[ -n "$AGENT" ] || { echo "run-model: --agent required" >&2; usage; exit 2; }
+[ -n "$TASK" ] || { echo "run-model: --task required" >&2; usage; exit 2; }
+[ -d "$CWD" ] || { echo "run-model: --cwd not a directory: $CWD" >&2; exit 2; }
+CWD=$(cd "$CWD" && pwd)
+if [ "$ENGINE" = deepseek ] && [ -n "$EFFORT" ]; then
+  echo "run-model: deepseek engine does not support --effort (profile default is used)" >&2; exit 2; fi
+if [ "$ENGINE" = deepseek ] && [ -n "$MODEL" ]; then
+  case "$MODEL" in deepseek-flash|deepseek-v4-pro);; *)
+    echo "run-model: deepseek --model must be deepseek-flash or deepseek-v4-pro (omit it for the profile default)" >&2; exit 2;; esac
+fi
+RD_ABS=(); WD_ABS=()
+for d in "${READ_DIRS[@]}"; do [ -d "$d" ] || { echo "run-model: --read-dir not a directory: $d" >&2; exit 2; }; RD_ABS+=("$(cd "$d" && pwd)"); done
+for d in "${WRITE_DIRS[@]}"; do [ -d "$d" ] || { echo "run-model: --write-dir not a directory: $d" >&2; exit 2; }; WD_ABS+=("$(cd "$d" && pwd)"); done
+case "$SANDBOX" in ""|read-only|workspace-write);; *) echo "run-model: --sandbox must be read-only|workspace-write" >&2; exit 2;; esac
+if [ "$ENGINE" = claude ] && [ -n "$SANDBOX" ]; then echo "run-model: claude has no --sandbox; use --write-dir to grant write access" >&2; exit 2; fi
+if [ "$ENGINE" = deepseek ] && [ $(( ${#RD_ABS[@]} + ${#WD_ABS[@]} )) -gt 0 ]; then
+  echo "run-model: deepseek (dsh headless) has no extra-directory option (workspace root is fixed to --cwd); --read-dir/--write-dir unsupported. Use --cwd on a common parent, or --sandbox." >&2; exit 2; fi
+if [ "$ENGINE" = codex ] && [ ${#WD_ABS[@]} -gt 0 ]; then
+  [ "$SANDBOX" = read-only ] && { echo "run-model: --write-dir conflicts with --sandbox read-only" >&2; exit 2; }
+  SANDBOX=workspace-write; fi
+case "$ROLE" in ""|code|review|other);; *) echo "run-model: --role must be code|review|other" >&2; exit 2;; esac
+# Review gate: for --role review --work-id ID, the engines of all --role code runs logged for ID (any exit code) are
+# the author engines; this engine must not be one of them, and $RULES must allow it as reviewer of every one of them.
+if [ "$ROLE" = review ] && [ -z "$WORK_ID" ]; then
+  echo "run-model: warning: --role review without --work-id; the engine is not checked against the code runs" >&2
+elif [ "$ROLE" = review ]; then
+  jq -e '.reviewers|type=="object"' "$RULES" >/dev/null 2>&1 ||
+    { echo "run-model: refused: --role review needs the rules table $RULES (missing or invalid)" >&2; exit 2; }
+  AUTH=; if [ -f "$LOG" ]; then
+    AUTH=$(jq -Rr --arg w "$WORK_ID" 'fromjson? | objects | select(.role=="code" and .work_id==$w) | "\(.engine) \(.run_id)"' "$LOG") ||
+      { echo "run-model: refused: cannot read $LOG to check the code runs of work_id=$WORK_ID" >&2; exit 2; }; fi
+  if [ -z "$AUTH" ]; then
+    echo "run-model: warning: no --role code run with work_id=$WORK_ID in $LOG (typo?); the engine is not checked against authors" >&2
+  else
+    AENG=$(printf '%s\n' "$AUTH" | cut -d' ' -f1 | sort -u)
+    REVIEWERS=$(jq -nr --arg a "$AENG" --slurpfile r "$RULES" '($a|split("\n")|map(select(length>0))) as $ae | $r[0].reviewers as $t
+      | [$t[] | .[]?] | unique | map(select(. as $x | ($ae|index($x)) == null and ([$ae[] | ($t[.] // []) | index($x) != null] | all)))
+      | join(" ")' 2>/dev/null)
+    AUTHS=$(printf '%s\n' "$AUTH" | paste -sd, - | sed 's/,/, /g')
+    if grep -qxF -- "$ENGINE" <<<"$AENG"; then
+      echo "run-model: refused: --role review --engine $ENGINE, but $ENGINE wrote code for work_id=$WORK_ID (code runs: $AUTHS); allowed reviewers per $RULES: ${REVIEWERS:-none}" >&2; exit 2; fi
+    case " $REVIEWERS " in *" $ENGINE "*);; *)
+      echo "run-model: refused: $RULES does not allow --engine $ENGINE to review work_id=$WORK_ID (code runs: $AUTHS); allowed reviewers: ${REVIEWERS:-none}" >&2; exit 2;; esac
+  fi
+fi
+# --commit (commit-options.md, option 甲): run-model itself commits what the engine left, outside the engine's sandbox,
+# so the git commands for it must not run a program the repo (and so the engine) controls, nor commit anywhere else.
+# They all go through cgit, but for the four git -C "$CWD" rev-parse that find the repository at the start (cgit needs
+# what they print; they run before the engine and before the git dirs are checked). cgit
+# - uses the git dir and the common dir recorded below (physical paths), never the work tree's .git (a pointer file in
+#   a worktree) or the git dir's commondir file, which the engine may rewrite; crepo notes what they are from the file
+#   system alone, so that after the run it is checked before any git command runs;
+# - sets core.hooksPath=/dev/null, which holds no hook, so no repo hook runs (husky-style hooks live in the work tree),
+#   and core.fsmonitor=false;
+# - sets commit.gpgSign=false (the commit itself also gets --no-gpg-sign): no gpg.program, gpg.ssh.program or
+#   gpg.ssh.defaultKeyCommand runs, whatever they point to, and the commits run-model makes are never signed;
+# - sets maintenance.auto=false and gc.auto=0 (TASK7): git commit starts no git maintenance or gc in the background,
+#   which would go on writing in the repository after the checks, and after run-model has exited;
+# - empties the commands of every filter driver configured at the start (CNOF) and makes it required: no clean or
+#   smudge program runs, and a file that needs one makes git fail instead of being staged unfiltered.
+# No commit if the config (ccfg) changed during the run. The commands used run no diff or merge driver, pager or editor.
+# Submodules are refused: each has its own .git, which git status and git add -A follow. So is anything in the git
+# dirs through which a git write could land in a file elsewhere (cmeta; TASK6 checked the ref store only), at the
+# start, after the run, and again just before git add -A and just before git commit (cagain). After the run, nothing
+# is committed either while a process of the engine's session is left (B3, see erun and cwait).
+cgit(){ GIT_COMMON_DIR=$CCD git --no-pager -C "$CTOP" --git-dir="$CGD" --work-tree="$CTOP" \
+  -c core.hooksPath=/dev/null -c core.fsmonitor=false -c commit.gpgSign=false -c maintenance.auto=false -c gc.auto=0 \
+  "${CNOF[@]}" "$@"; }
+cgiti(){ ( export GIT_INDEX_FILE="$TI"; cgit "$@" ); }   # cgit on the index copy $TI
+dotgit(){ if [ -L "$CTOP/.git" ]; then printf 'symlink to %s' "$(readlink -- "$CTOP/.git")"
+  elif [ -f "$CTOP/.git" ]; then printf 'file, sha256 %s' "$(sha256sum < "$CTOP/.git" | cut -d' ' -f1)"
+  elif [ -d "$CTOP/.git" ]; then printf directory; else printf missing; fi; }
+# cplain NAME FILE (R1, TASK8) prints "; NAME sha256 <sha256 of FILE>" if FILE is a plain file, "; no NAME" if there is
+# none, and "; NAME not a plain file (not read)" for anything else (a symbolic link, wherever it points, a FIFO, a
+# directory, ...), which it does not open: to open a FIFO, or a symbolic link to one, for reading waits until something
+# writes to it. -L comes first, as -f follows symbolic links.
+cplain(){ if [ -L "$2" ]; then printf '; %s not a plain file (not read)' "$1"
+  elif [ -f "$2" ]; then printf '; %s sha256 %s' "$1" "$(sha256sum < "$2" 2>/dev/null | cut -d' ' -f1)"
+  elif [ -e "$2" ]; then printf '; %s not a plain file (not read)' "$1"; else printf '; no %s' "$1"; fi; }
+# crepo reads commondir and alternates, so it runs only once cmeta has found nothing (R1, TASK8): at the start, after
+# the run and in cagain
+crepo(){ local d; printf 'dev:inode'   # of the work tree, git dir, common dir, its objects, refs, reftable (- if missing)
+  for d in "$CTOP" "$CGD" "$CCD" "$CCD/objects" "$CCD/refs" "$CCD/reftable"; do printf ' %s' "$(stat -c %d:%i -- "$d" 2>/dev/null || echo -)"; done
+  cplain commondir "$CGD/commondir"
+  # (TASK7) the list of other object stores git reads (and whose object files it may touch, to mark them as in use)
+  cplain alternates "$CCD/objects/info/alternates"
+  printf '; .git: '; dotgit; }
+# cmeta (TASK7, B1 and B2; it replaces crefl, which looked at the ref store only) prints what in the common dir and the
+# git dir a git write could go through to a file elsewhere: anything but a regular file or a directory (a symbolic link,
+# a FIFO, a socket, ...), and, outside objects/, a regular file with more than one hard link. All that git add -A and
+# git commit write is in these two dirs: index, objects/, COMMIT_EDITMSG, the branch or HEAD (refs/, packed-refs,
+# reftable/) and their reflogs (logs/). Git follows a symbolic link to lock and replace a file (index, packed-refs), to
+# write COMMIT_EDITMSG and to append to a reflog; those last two it writes in place, so into a file shared through a
+# hard link too. objects/ is left out of the hard link test only: a local clone hard-links its objects, and git never
+# writes into an existing object file (at most it updates its mtime). hooks/ is left out: with core.hooksPath=/dev/null
+# no git command here reads or writes it, and a hook may be a symbolic link (installation step 7). find does not go
+# into it (N1, TASK8: -prune; before, it went in and awk dropped what it found there, and that awk line is kept as a
+# fallback). -path takes a pattern, so * ? [ ] and \ in the path are escaped: it matches $CCD/hooks and nothing else.
+# find looks at the type and the link count of each file only; it opens no file but the directories. Fails if find does.
+cmeta(){ find "$CCD" "$CGD" -path "$(printf '%s' "$CCD/hooks" | sed 's/[][*?\\]/\\&/g')" -prune -o \
+    ! -type d \( ! -type f -o -links +1 \) -printf '%y %p\n' |
+  H=$CCD/hooks O=$CCD/objects/ awk '{ t = substr($0, 1, 1); p = substr($0, 3) }
+    p == ENVIRON["H"] || index(p, ENVIRON["H"] "/") == 1 { next }
+    t == "f" && index(p, ENVIRON["O"]) == 1 { next }
+    { k = (t == "l") ? "symlink" : (t == "f") ? "hardlink" : ("type-" t); print k " " p }' | sort -u; }
+cmetanote(){ printf '%s path(s) in the git dirs are neither a plain file nor a directory, or have more than one hard link (%s); through one, a git write can land in a file outside the repository' \
+  "$(printf '%s\n' "$1" | wc -l)" "$(printf '%s\n' "$1" | head -n 5 | paste -sd, - | sed 's/,/, /g')"; }
+# B3 (TASK7). With --commit the engine heads a session of its own (erun), whose id CSID is the engine's pid; a process
+# leaves it only by calling setsid itself. csess prints the pids of the processes still in it (zombies aside), read
+# from /proc; cwait waits until there are none, for CWAIT seconds at most, and prints those left.
+CWAIT=10
+csess(){ local f s
+  for f in /proc/[0-9]*/stat; do
+    { IFS= read -r s < "$f"; } 2>/dev/null || continue
+    s=${s##*') '}; set -- $s   # what follows "pid (command) ": state, parent, process group, session, ...
+    [ "${4-}" = "$CSID" ] && case ${1-} in Z|X) ;; *) f=${f%/stat}; printf '%s\n' "${f#/proc/}";; esac
+  done; }
+cwait(){ local i=0 p
+  while p=$(csess); [ -n "$p" ] && [ $i -lt $CWAIT ]; do sleep 1; i=$((i + 1)); done
+  printf '%s' "$p"; }
+# cagain (B3) checks again, just before git add -A and just before git commit, what could have changed since the
+# checks: the git dirs (cmeta), then (R1, TASK8: only then) the repository (crepo), its config, HEAD and the branch.
+# Prints what changed, if any.
+cagain(){ local n
+  n=$(cmeta) || { printf 'could not check the git dirs for links'; return; }
+  [ -z "$n" ] || { cmetanote "$n"; return; }
+  n=$(crepo); [ "$n" = "$CFP" ] || { printf 'the repository is not the one recorded at the start any more (now: %s)' "$n"; return; }
+  { n=$(ccfg) && [ "$n" = "$CCFG" ]; } || { printf 'the git config changed, or cannot be read'; return; }
+  n=$(cgit rev-parse -q --verify 'HEAD^{commit}'); [ "$n" = "$NOW" ] || { printf 'HEAD changed from %s to %s' "$NOW" "${n:-nothing}"; return; }
+  n=$(cgit symbolic-ref -q HEAD); [ "$n" = "$CREF" ] || printf 'HEAD moved from %s to %s' "${CREF:-a detached HEAD}" "${n:-a detached HEAD}"; }
+ccfg(){ cgit config --list --show-origin -z | sha256sum | cut -d' ' -f1; }   # all the config git reads, as one hash
+cbusy(){ local s   # prints the operation in progress, other than a merge, that a commit would wrongly conclude or split
+  for s in CHERRY_PICK_HEAD REVERT_HEAD rebase-merge rebase-apply sequencer BISECT_START; do
+    [ -e "$CGD/$s" ] && { printf '%s' "$s"; return 0; }; done
+  for s in CHERRY_PICK_HEAD REVERT_HEAD; do cgit rev-parse -q --verify "$s" >/dev/null && { printf '%s' "$s"; return 0; }; done
+  return 1; }
+csubmods(){ local n   # prints why the repo has submodules: a .gitmodules file, or gitlinks in the index or in HEAD
+  if [ -e "$CTOP/.gitmodules" ] || [ -L "$CTOP/.gitmodules" ]; then printf '%s/.gitmodules exists' "$CTOP"; return 0; fi
+  n=$({ cgit ls-files -s && cgit ls-tree -r --full-tree HEAD; } | awk '$1=="160000"{n++} END{print n+0}') || return 1
+  [ "$n" = 0 ] || printf '%s gitlink(s) (submodule entries) in the index or in HEAD' "$n"; }
+if [ $HAVEC = 1 ]; then
+  case "$CTITLE" in *[![:space:]]*);; *) echo "run-model: --commit needs a non-empty title" >&2; exit 2;; esac
+  case "$CTITLE" in *$'\n'*|*$'\r'*) echo "run-model: --commit title must be a single line" >&2; exit 2;; esac
+  [ "$ROLE" = review ] && { echo "run-model: --commit cannot be used with --role review" >&2; exit 2; }
+  { command -v setsid && [ -r /proc/self/stat ]; } >/dev/null 2>&1 ||
+    { echo "run-model: --commit needs setsid (util-linux) and /proc: the engine runs in a session of its own, and nothing is committed while a process of that session is left" >&2; exit 2; }
+  { [ "$(git -C "$CWD" rev-parse --is-inside-work-tree 2>/dev/null)" = true ] &&
+    CGD=$(git -C "$CWD" rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$CGD" ] &&
+    CCD=$(git -C "$CWD" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && [ -n "$CCD" ] &&
+    CTOP=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null) && [ -n "$CTOP" ]; } ||
+    { echo "run-model: --commit: --cwd is not in a git work tree: $CWD" >&2; exit 2; }
+  { CGD=$(cd -P "$CGD" && pwd -P) && CCD=$(cd -P "$CCD" && pwd -P) && CTOP=$(cd -P "$CTOP" && pwd -P); } ||
+    { echo "run-model: --commit: cannot resolve the git dirs of $CWD" >&2; exit 2; }
+  RL=$(cmeta) || { echo "run-model: --commit: cannot check the git dirs of $CTOP ($CCD, $CGD) for links" >&2; exit 2; }
+  [ -z "$RL" ] || { echo "run-model: --commit refused: $(cmetanote "$RL")" >&2; exit 2; }
+  CFP=$(crepo)   # (R1, TASK8) after cmeta, as crepo reads commondir and alternates
+  CNOF=()
+  while IFS= read -r CK; do CN=${CK#filter.}; [ "${CN%.*}" = "$CN" ] && continue; CN=${CN%.*}   # filter.<name>.<key>
+    case "$CN" in *=*) echo "run-model: --commit: git filter driver names with \"=\" are not supported: $CN" >&2; exit 2;; esac
+    CNOF+=(-c "filter.$CN.clean=" -c "filter.$CN.smudge=" -c "filter.$CN.process=" -c "filter.$CN.required=true")
+  done < <(cgit config --name-only --get-regexp '^filter\.' 2>/dev/null)
+  CCFG=$(ccfg) || { echo "run-model: --commit: cannot read the git config of $CTOP" >&2; exit 2; }
+  CHEAD=$(cgit rev-parse -q --verify 'HEAD^{commit}') || { echo "run-model: --commit: no commit at HEAD yet in $CTOP" >&2; exit 2; }
+  CREF=$(cgit symbolic-ref -q HEAD)   # CREF stays empty on a detached HEAD
+  OP=$(cbusy) && { echo "run-model: --commit: a cherry-pick, revert, rebase, am or bisect is in progress in $CTOP ($OP); finish or abort it first" >&2; exit 2; }
+  SM=$(csubmods) || { echo "run-model: --commit: cannot check $CTOP for submodules" >&2; exit 2; }
+  [ -z "$SM" ] || { echo "run-model: --commit does not support submodules: $SM" >&2; exit 2; }
+  CMH=$(cgit rev-parse -q --verify MERGE_HEAD)
+  if [ -z "$CMH" ]; then
+    CST=$(cgit status --porcelain --untracked-files=normal) || { echo "run-model: --commit: git status failed in $CTOP" >&2; exit 2; }
+    [ -z "$CST" ] || { echo "run-model: --commit needs a clean work tree, so that the commit holds only this run's changes; $CTOP has:" >&2
+      printf '%s\n' "$CST" | head -n 20 >&2; exit 2; }
+  else   # the engine may work on the merge (plan 3.4), but whether its conflicts are resolved is checked by a person
+    echo "run-model: --commit: a merge is in progress in $CTOP (MERGE_HEAD $CMH); the run goes ahead, but nothing will be committed after it: check the result, then git add and commit by hand" >&2
+  fi
+fi
+RUN_ID=$(TZ="$RUN_TIMEZONE" date +%Y%m%dT%H%M%S)-$(head -c4 /dev/urandom | od -An -tx1 | tr -d ' \n')
+RD=$LOGDIR/$RUN_ID; mkdir -p "$RD" || exit 1
+if [ -n "$PFILE" ]; then cp -- "$PFILE" "$RD/prompt.txt" || exit 2
+elif [ $HAVEP = 1 ]; then printf '%s' "$PROMPT" > "$RD/prompt.txt"
+elif [ ! -t 0 ]; then cat > "$RD/prompt.txt"
+else echo "run-model: no prompt given" >&2; usage; exit 2; fi
+[ -s "$RD/prompt.txt" ] || { echo "run-model: empty prompt" >&2; exit 2; }
+PROMPT=$(cat "$RD/prompt.txt")
+RAW=$RD/raw.jsonl; ERR=$RD/stderr.txt; OUT=$RD/output.txt
+now(){ TZ="$RUN_TIMEZONE" date +%Y-%m-%dT%H:%M:%S.%3N%:z; }
+START=$(now); T0=$(date +%s.%N)
+echo "run-model: RUN_ID=$RUN_ID engine=$ENGINE starting in $CWD" >&2
+ACTUAL='[]'; NOTE=
+cd "$CWD"
+# Commit tags (git-hooks/prepare-commit-msg): the engine, and the git hooks run under it, inherit RUN_MODEL_RUN_ID and
+# RUN_MODEL_ENGINE. If CWD is in a git repo the pair also goes to <git dir>/run-model-last (never the work tree) for
+# engines that do not pass the environment on; it is removed when run-model exits, so later commits are not tagged.
+export RUN_MODEL_RUN_ID=$RUN_ID RUN_MODEL_ENGINE=$ENGINE
+if GITDIR=$(git rev-parse --absolute-git-dir 2>/dev/null) && [ -n "$GITDIR" ]; then
+  if { printf 'RUN_MODEL_RUN_ID=%s\nRUN_MODEL_ENGINE=%s\n' "$RUN_ID" "$ENGINE" > "$GITDIR/run-model-last"; } 2>/dev/null; then
+    trap 'grep -qxF "RUN_MODEL_RUN_ID=$RUN_ID" "$GITDIR/run-model-last" 2>/dev/null && rm -f "$GITDIR/run-model-last"' EXIT
+  else echo "run-model: warning: cannot write $GITDIR/run-model-last; commits are tagged only via the environment" >&2; fi
+fi
+# erun runs the engine (eng, set for each engine below) with stdin from /dev/null, stdout to $RAW and stderr to $ERR,
+# and sets RC. Without --commit as before: a subshell that execs it. With --commit (B3, TASK7) through setsid, so that
+# the engine heads a session and a process group of its own, whose id CSID is its pid (setsid does not fork here: with
+# job control off, the subshell that & starts stays in run-model's process group, so it is not a process-group leader);
+# after it, cwait waits for the rest of that session. It runs in the background, so that run-model can pass on the
+# TERM, INT and HUP the engine used to get along with run-model's process group (Ctrl-C, timeout); ESIG names such a
+# signal, and then nothing is committed.
+ESIG= CSID=
+erun(){ local s
+  if [ $HAVEC = 0 ]; then ( eng ) < /dev/null > "$RAW" 2> "$ERR"; RC=$?; return; fi
+  set +m
+  ( trap - INT QUIT; eng setsid ) < /dev/null > "$RAW" 2> "$ERR" & CSID=$!   # trap -: & would leave INT, QUIT ignored
+  for s in TERM INT HUP; do trap "ESIG=$s; kill -$s -- -$CSID 2>/dev/null || kill -$s $CSID 2>/dev/null" "$s"; done
+  # a trapped signal ends wait early: wait again while the engine is still there
+  while wait "$CSID"; RC=$?; [ -n "$ESIG" ] && [ $RC -gt 128 ] && kill -0 "$CSID" 2>/dev/null; do :; done
+  trap - TERM INT HUP; }
+case "$ENGINE" in
+claude)
+  args=(-p "$PROMPT" --output-format json); [ -n "$MODEL" ] && args+=(--model "$MODEL"); [ -n "$EFFORT" ] && args+=(--effort "$EFFORT")
+  if [ $(( ${#RD_ABS[@]} + ${#WD_ABS[@]} )) -gt 0 ]; then
+    allow=(); for d in "${RD_ABS[@]}" "${WD_ABS[@]}"; do args+=(--add-dir "$d"); allow+=("Read(/$d/**)" "Glob(/$d/**)" "Grep(/$d/**)"); done
+    for d in "${WD_ABS[@]}"; do allow+=("Edit(/$d/**)" "Write(/$d/**)"); done
+    # Extra directory grants: --write-dir/--read-dir used to omit Bash, so git/bwrap/node
+    # were auto-denied under --permission-prompts none. Allow a minimal command set.
+    allow+=(
+      "Bash(git *)" "Bash(node *)" "Bash(npm *)" "Bash(npx *)"
+      "Bash(mkdir *)" "Bash(cp *)" "Bash(diff *)" "Bash(ls *)" "Bash(cat *)"
+      "Bash(head *)" "Bash(wc *)" "Bash(find *)" "Bash(rg *)" "Bash(grep *)"
+      "Bash(sed *)" "Bash(awk *)" "Bash(chmod *)" "Bash(rm *)" "Bash(mv *)"
+      "Bash(tar *)" "Bash(test *)" "Bash(command *)" "Bash(which *)"
+      "Bash(env -i *)" "Bash(bwrap *)" "Bash(bash *)" "Bash(sh *)"
+      "Bash(python3 *)" "Bash(timeout *)" "Bash(tee *)" "Bash(uname *)"
+    )
+    [ -n "${ALLOW_WEB-}" ] && allow+=(WebSearch WebFetch)
+    args+=(--permission-prompts none --allowedTools "${allow[@]}")
+  fi
+  eng(){ set +x; if [ -n "$CLAUDE_ENV_SCRIPT" ]; then . "$CLAUDE_ENV_SCRIPT" || exit 2; fi; exec "$@" "${CLAUDE_COMMAND[@]}" "${args[@]}"; }; erun
+  jq -r '.result // empty' "$RAW" > "$OUT" 2>/dev/null
+  ACTUAL=$(jq -c '[(.modelUsage // {} | keys[]), (.model // empty)] | unique' "$RAW" 2>/dev/null || echo '[]')
+  NOTE="from claude --output-format json modelUsage keys";;
+codex)
+  args=(exec --skip-git-repo-check --json); [ -n "$MODEL" ] && args+=(-m "$MODEL"); [ -n "$EFFORT" ] && args+=(-c "model_reasoning_effort=$EFFORT")
+  [ -n "$SANDBOX" ] && args+=(-s "$SANDBOX"); args+=(-c 'approval_policy="never"')  # codex exec has no -a flag
+  for d in "${WD_ABS[@]}"; do args+=(--add-dir "$d"); done
+  eng(){ exec "$@" "${CODEX_COMMAND[@]}" "${args[@]}" "$PROMPT"; }; erun
+  jq -rs '[.[]|select(.type=="item.completed" and .item.type=="agent_message")|.item.text]|last // empty' "$RAW" > "$OUT" 2>/dev/null
+  TID=$(jq -r 'select(.type=="thread.started")|.thread_id' "$RAW" 2>/dev/null | head -1)
+  SF=; [ -n "$TID" ] && [ -n "$CODEX_SESSIONS" ] && SF=$(find "$CODEX_SESSIONS" -name "*$TID*.jsonl" 2>/dev/null | head -1)
+  if [ -n "$SF" ]; then
+    ACTUAL=$(grep -o '"model":"[^"]*"' "$SF" | sed 's/"model":"//;s/"$//' | sort -u | jq -Rsc 'split("\n")|map(select(length>0))')
+    AEFF=$(grep -o '"effort":"[^"]*"' "$SF" | sed 's/"effort":"//;s/"$//' | sort -u | paste -sd, -)
+    NOTE="from codex session file turn_context ($SF)${AEFF:+; effort=$AEFF}"
+  fi
+  [ "$ACTUAL" = '[]' ] && { ACTUAL='["account-default (not reported)"]'; NOTE="codex did not report model"; };;
+deepseek)
+  args=(--profile "$DEEPSEEK_PROFILE" --json)
+  # --model: dsh has no model option. Write a config patch overriding agent-default-model into the run dir and use the
+  # form verified 2026-10-14 17:34: dsh --profile headless --patch FILE ... PROMPT (--patch must come before the prompt).
+  if [ -n "$MODEL" ]; then PATCH=$RD/model-patch.yml
+    printf '%s\n' "- id: $DEEPSEEK_MODEL_ID" '  config:' "    provider: $DEEPSEEK_PROVIDER" "    model: $MODEL" > "$PATCH" ||
+      { echo "run-model: cannot write $PATCH; dsh not started" >&2; exit 1; }
+    args=(--profile "$DEEPSEEK_PROFILE" --patch "$PATCH" --json); fi
+  eng(){ [ -n "$SANDBOX" ] && export DSH_PERMISSION_MODE="$SANDBOX"; exec "$@" "${DEEPSEEK_COMMAND[@]}" "${args[@]}" "$PROMPT"; }; erun
+  jq -rs '[.[]|select(.type=="final")|.text]|last // empty' "$RAW" > "$OUT" 2>/dev/null
+  EV=$(jq -rs '[.[]|..|objects|.model? // empty|strings]|unique|.[]' "$RAW" 2>/dev/null)
+  if [ -n "$EV" ]; then ACTUAL=$(printf '%s\n' "$EV" | jq -Rsc 'split("\n")|map(select(length>0))'); NOTE="from dsh --json events"
+  elif [ -n "$MODEL" ]; then ACTUAL=$(jq -nc --arg m "$MODEL" '[$m]')   # the profile-config fallback below ignores the patch
+    NOTE="dsh events do not report model; requested --model, applied via --patch $PATCH (agent-default-model); the API rejects model names it does not support"
+  else
+    CM=$("${DEEPSEEK_COMMAND[@]}" --profile "$DEEPSEEK_PROFILE" --dump-config 2>/dev/null | awk -v id="$DEEPSEEK_MODEL_ID" '$1=="-" && $2=="id:" && $3==id{f=1} f&&/provider:/{p=$2} f&&/model:/{print p"/"$2; exit}')
+    if [ -n "$CM" ]; then ACTUAL=$(jq -nc --arg m "$CM" '[$m]'); NOTE="dsh events do not report model; taken from headless profile config (agent-default-model)"
+    else ACTUAL='["not reported"]'; NOTE="dsh did not report model"; fi
+  fi;;
+esac
+# Empty or malformed engine output must not prevent failure accounting.
+jq -e 'type == "array"' <<<"$ACTUAL" >/dev/null 2>&1 || ACTUAL='[]'
+END=$(now); DUR=$(awk -v a="$T0" -v b="$(date +%s.%N)" 'BEGIN{printf "%.3f", b-a}')
+[ -s "$OUT" ] || { [ -s "$RAW" ] && cp "$RAW" "$OUT" || : > "$OUT"; }
+cat "$OUT"; [ -n "$(tail -c1 "$OUT")" ] && echo
+[ $RC -ne 0 ] && { echo "run-model: engine exited $RC; stderr tail:" >&2; tail -n 20 "$ERR" >&2; }
+# --commit, after the engine. First (B3, TASK7) nothing is committed if run-model got TERM, INT or HUP while the engine
+# ran, nor if a process of the engine's session is still there CWAIT seconds after the engine exited (cwait); no git
+# command runs then. Then, before any git command, the git dirs must hold nothing a git write could go through to
+# elsewhere (cmeta; TASK6 looked at the ref store only, with crefl), and, checked only then (R1, TASK8: crepo reads
+# commondir and alternates), the repository must be the one recorded (crepo); then its config, the branch and the
+# history must be unchanged. No
+# commit either for a run begun during a merge (a person checks the result and concludes the merge; nothing here judges
+# whether conflicts are resolved, so no .gitattributes the engine can edit is relied on), while a cherry-pick, revert,
+# rebase, am or bisect is in progress, after a merge begun during the run, with submodules, or with a path still
+# unmerged in the index (staging a path is what resolves its conflict, and is left to the engine or to whoever checks
+# its work). git add -A goes into a copy of the index first, so a refusal leaves the real index as it was. Then git
+# add -A and commit with the trailers written here; just before each of the two, cagain checks again what could have
+# changed since the checks (B3), and if it did, nothing more runs in the repository, not even the git rev-list for
+# "commits". exit_code stays the engine's; commit problems go to stderr and commit_note.
+CJSON=null CNOTE= CAG=
+if [ $HAVEC = 1 ]; then
+  CT=$CTITLE; [ $RC -ne 0 ] && CT="[未完成 exit=$RC] $CTITLE"
+  if [ -n "$ESIG" ]; then CNOTE="not committed: run-model got SIG$ESIG while the engine ran (and passed it on to the engine's process group)"
+  elif LEFT=$(cwait); [ -n "$LEFT" ]; then
+    CNOTE="not committed: $(printf '%s\n' "$LEFT" | wc -l) process(es) of the engine's session still running $CWAIT s after the engine exited (pid $(printf '%s\n' "$LEFT" | head -n 5 | paste -sd' ' -)); they could still change the repository"
+  elif ! RL=$(cmeta); then CNOTE="not committed: could not check the git dirs for links"
+  elif [ -n "$RL" ]; then CNOTE="not committed: $(cmetanote "$RL")"
+  elif NFP=$(crepo); [ "$NFP" != "$CFP" ]; then   # (R1, TASK8) after cmeta, as crepo reads commondir and alternates
+    CNOTE="not committed: the repository is not the one recorded at the start (before: $CFP; now: $NFP); git commands run in $CTOP may now use another git dir"
+  elif ! NCFG=$(ccfg) || [ "$NCFG" != "$CCFG" ]; then
+    CNOTE="not committed: the git config changed during the run, or cannot be read; it can make git run programs, so check it (git config --list --show-origin) before running git in $CTOP"
+  elif NOW=$(cgit rev-parse -q --verify 'HEAD^{commit}'); [ -z "$NOW" ]; then CNOTE="not committed: HEAD does not resolve to a commit after the run"
+  elif NREF=$(cgit symbolic-ref -q HEAD); [ "$NREF" != "$CREF" ]; then
+    CNOTE="not committed: HEAD moved from ${CREF:-a detached HEAD} to ${NREF:-a detached HEAD} during the run"
+  elif ! cgit merge-base --is-ancestor "$CHEAD" "$NOW"; then
+    CNOTE="not committed: history was rewritten during the run (HEAD was $CHEAD, now $NOW: amend, rebase or reset?)"
+  else
+    TI=$RD/commit-check.index TD=$RD/commit-check.out
+    if [ -n "$CMH" ]; then
+      CNOTE="not committed: a merge was in progress when the run started (MERGE_HEAD $CMH); --commit never concludes a merge: check the result by hand (conflict markers, also in files git treats as binary), then git add and commit"
+    elif OP=$(cbusy); then CNOTE="not committed: a cherry-pick, revert, rebase, am or bisect is in progress ($OP); finish or abort it first"
+    elif NMH=$(cgit rev-parse -q --verify MERGE_HEAD); [ -n "$NMH" ]; then
+      CNOTE="not committed: a merge was begun during the run (MERGE_HEAD $NMH); --commit never concludes a merge"
+    elif ! SM=$(csubmods); then CNOTE="not committed: could not check for submodules"
+    elif [ -n "$SM" ]; then CNOTE="not committed: $SM; --commit does not support submodules"
+    elif ! UM=$(cgit ls-files -u); then CNOTE="not committed: git ls-files -u failed"
+    elif [ -n "$UM" ]; then UM=$(printf '%s\n' "$UM" | cut -f2- | sort -u)
+      CNOTE="not committed: $(printf '%s\n' "$UM" | wc -l) path(s) unmerged in the index ($(printf '%s\n' "$UM" | head -n 5 | paste -sd' ' -)); a conflict counts as resolved once its path is staged (git add), which --commit leaves to the engine or to whoever checks its work"
+    elif ! { rm -f -- "$TI"; [ ! -e "$CGD/index" ] || cp -- "$CGD/index" "$TI"; }; then CNOTE="not committed: could not copy $CGD/index"
+    elif ! cgiti add -A > "$TD" 2>&1; then
+      CNOTE="not committed: git add -A failed (on a copy of the index; the real one is untouched): $(cat "$TD")"
+    elif ! GL=$(cgiti ls-files -s | awk '$1=="160000"{n++} END{print n+0}'); then CNOTE="not committed: could not list what git add -A stages"
+    elif [ "$GL" != 0 ]; then CNOTE="not committed: git add -A would stage $GL gitlink(s), i.e. a git repository inside the work tree; --commit does not support submodules"
+    fi
+    rm -f -- "$TI" "$TD"
+    if [ -n "$CNOTE" ]; then :
+    elif R=$(cagain); [ -n "$R" ]; then CAG=1; CNOTE="not committed: $R (checked again just before git add -A)"
+    elif ! CE=$(cgit add -A 2>&1); then CNOTE="not committed: git add -A failed: $CE"
+    else
+      [ -n "$CE" ] && printf '%s\n' "$CE" >&2
+      cgit diff --cached --quiet --no-ext-diff --no-textconv HEAD; DQ=$?
+      if [ $DQ -gt 1 ]; then CNOTE="not committed: git diff --cached failed (exit $DQ)"
+      elif [ $DQ = 0 ]; then CNOTE="nothing to commit: no changes after the run"
+      elif R=$(cagain); [ -n "$R" ]; then CAG=1
+        CNOTE="not committed: $R (checked again just before git commit; the changes are left in the work tree and the index)"
+      else printf '%s\n\nRun-Id: %s\nEngine: %s\n' "$CT" "$RUN_ID" "$ENGINE" > "$RD/commit-msg.txt"
+        if CE=$(cgit commit -q --no-verify --no-gpg-sign --cleanup=verbatim -F "$RD/commit-msg.txt" 2>&1); then
+          echo "run-model: --commit: committed $(cgit rev-parse HEAD) \"$CT\"; files:" >&2
+          cgit diff --stat=200 --no-ext-diff --no-textconv "$NOW" HEAD >&2
+        else CNOTE="commit failed (the changes are left in the work tree and the index): $CE"; fi
+      fi
+    fi
+    [ -n "$CAG" ] || CJSON=$(cgit rev-list --reverse --first-parent "$CHEAD..HEAD" | jq -Rsc 'split("\n")|map(select(length>0))') || CJSON=null
+  fi
+  [ -n "$CNOTE" ] && echo "run-model: --commit: $CNOTE" >&2
+fi
+SHA=$(sha256sum "$RD/prompt.txt" | cut -d' ' -f1)
+mkdir -p "$LOGDIR"
+jq -nc --arg run_id "$RUN_ID" --arg start "$START" --arg end "$END" --argjson dur "$DUR" \
+  --arg agent "$AGENT" --arg task "$TASK" --arg engine "$ENGINE" --arg rm "$MODEL" --arg re "$EFFORT" \
+  --argjson actual "$ACTUAL" --arg note "$NOTE" --argjson rc "$RC" --arg cwd "$CWD" --arg sha "$SHA" \
+  --arg head "${PROMPT:0:200}" --arg out "$OUT" --arg pp "$RD/prompt.txt" \
+  --argjson rdirs "$(printf '%s\n' "${RD_ABS[@]}" | jq -Rsc 'split("\n")|map(select(length>0))')" \
+  --argjson wdirs "$(printf '%s\n' "${WD_ABS[@]}" | jq -Rsc 'split("\n")|map(select(length>0))')" --arg sb "$SANDBOX" \
+  --arg role "$ROLE" --arg wid "$WORK_ID" \
+  --argjson commits "$CJSON" --arg cnote "$CNOTE" \
+  '{run_id:$run_id,start_time:$start,end_time:$end,duration_s:($dur*1000|round/1000),agent:$agent,task:$task,engine:$engine,
+    requested_model:(if $rm=="" then null else $rm end),requested_effort:(if $re=="" then null else $re end),
+    actual_models:$actual,actual_model_source:$note,exit_code:$rc,cwd:$cwd,prompt_sha256:$sha,prompt_head:$head,
+    prompt_path:$pp,output_path:$out,read_dirs:$rdirs,write_dirs:$wdirs,sandbox:(if $sb=="" then null else $sb end),
+    role:(if $role=="" then null else $role end),work_id:(if $wid=="" then null else $wid end),
+    commits:$commits,commit_note:(if $cnote=="" then null else $cnote end)}' >> "$LOG"
+echo "RUN_ID=$RUN_ID" >&2
+exit $RC

@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "name": "纸鸢小队配对示例",
+  "description": "虚构团队；reviewers 按作者引擎列出允许的复审引擎。",
+  "reviewers": {
+    "claude": ["codex", "deepseek"],
+    "codex": ["claude", "deepseek"],
+    "deepseek": ["claude", "codex"]
+  }
+}

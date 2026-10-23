@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "log_dir": "./model-runs",
+  "rules_file": "./review-policy.json",
+  "timezone": "UTC",
+  "engines": {
+    "claude": {"command": ["claude"], "model": null, "effort": null},
+    "codex": {"command": ["codex"], "model": null, "effort": null, "sessions_dir": null},
+    "deepseek": {"command": ["dsh"], "model": null, "effort": null, "profile": "headless", "provider": "deepseek-official", "model_id": "agent-default-model"}
+  },
+  "agents": ["纸鸢工匠", "星砂校验员", "云帆观察员"]
+}

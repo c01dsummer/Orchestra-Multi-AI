@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""run-estimate：按 runs.jsonl 里的历史运行估计一次模型运行要多久。只用标准库，不联网。"""
+import json
+import sys
+from orchestra_config import load
+
+DEFAULT_FILE = "configured log_dir/runs.jsonl"
+MIN_RUNS = 3  # 匹配少于这么多次就放宽条件
+KEYS = ("model", "effort", "agent", "task")  # 匹配条件的显示顺序
+DROP_ORDER = (("task",), ("agent",), ("model", "effort"))  # 依次放宽；engine 从不放宽
+OPTS = {"--engine": "engine", "--model": "model", "--effort": "effort",
+        "--agent": "agent", "--task-like": "task", "--file": "file"}
+INF = float("inf")
+
+HELP = f"""用法：run-estimate --engine ENGINE [--model MODEL] [--effort EFFORT] [--agent NAME]
+                    [--task-like KEYWORD] [--file PATH]
+
+按历史运行记录估计一次模型运行大概要多久：取同类成功运行耗时的中位数。
+
+  --engine ENGINE      必填，如 claude、codex、deepseek；放宽条件时也始终保留
+  --model MODEL        requested_model 等于它（不分大小写）
+  --effort EFFORT      requested_effort 等于它（不分大小写）
+  --agent NAME         agent 完全等于它
+  --task-like KEYWORD  task 包含这个关键词（不分大小写）
+  --file PATH          记录文件，默认 {DEFAULT_FILE}
+  -h, --help           显示本帮助
+
+只统计 exit_code 为 0 且 duration_s 是数字的记录，读不了的行直接跳过。
+匹配不足 {MIN_RUNS} 次时依次放宽：先去掉 --task-like，再去掉 --agent，最后去掉 --model 和 --effort。
+
+退出码：0 正常；1 没有可参考的记录；2 参数错误或读不到文件。
+
+示例：run-estimate --engine claude --model opus --effort max --task-like review"""
+
+
+def die(msg, code):
+    print(f"run-estimate：{msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def parse_args(argv):
+    args = {}
+    i = 0
+    while i < len(argv):
+        if argv[i] in ("-h", "--help"):
+            print(HELP)
+            sys.exit(0)
+        name, eq, value = argv[i].partition("=")
+        if name not in OPTS:
+            die(f"不认识的参数 {argv[i]}，用 --help 看用法", 2)
+        if not eq:
+            i += 1
+            if i == len(argv) or argv[i].startswith("-"):
+                die(f"{name} 后面缺少取值", 2)
+            value = argv[i]
+        args[OPTS[name]] = value.strip()
+        i += 1
+    if not args.get("engine"):
+        die("必须指定 --engine，例如 --engine claude；用 --help 看用法", 2)
+    return args
+
+
+def low(v):
+    return v.strip().lower() if isinstance(v, str) else ""
+
+
+def load_runs(path, engine):
+    """该 engine 的成功运行：[(秒数, {model, effort, agent, task}), ...]；坏行跳过。"""
+    runs = []
+    try:
+        with open(path, encoding="utf-8-sig", errors="replace") as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                    if not isinstance(r, dict) or low(r.get("engine")) != engine:
+                        continue
+                    code, secs = r.get("exit_code"), r.get("duration_s")
+                    if type(code) is bool or code != 0 or type(secs) not in (int, float):
+                        continue  # false == 0 在 Python 里成立，要单独排除
+                    secs = float(secs)  # 超大整数会抛 OverflowError
+                except (ValueError, RecursionError, OverflowError):
+                    continue
+                if not 0 <= secs < INF:  # 一次排掉负数、NaN、inf
+                    continue
+                runs.append((secs, {
+                    "model": low(r.get("requested_model")),
+                    "effort": low(r.get("requested_effort")),
+                    "agent": r.get("agent"),
+                    "task": low(r.get("task")),
+                }))
+    except OSError as e:
+        die(f"读不到记录文件 {path}：{e.strerror or e}", 2)
+    return runs
+
+
+def quantile(xs, p):
+    """已排序列表的分位数，线性插值（同 numpy 默认），不会超过最大值。"""
+    k = (len(xs) - 1) * p
+    i = int(k)
+    j = min(i + 1, len(xs) - 1)
+    return xs[i] + (xs[j] - xs[i]) * (k - i)
+
+
+def half_up(x):
+    return int(x + 0.5)  # round() 是银行家舍入，round(2.5) == 2
+
+
+def fmt(secs):
+    s = half_up(secs)
+    return f"{s} 秒" if s < 60 else f"{secs / 60:.1f} 分"
+
+
+def show(v):
+    return f'"{v}"' if any(c.isspace() for c in v) else v
+
+
+def main(argv):
+    args = parse_args(argv)
+    if args.get("file"):
+        path = args["file"]
+    else:
+        try:
+            path = load()["LOG"]
+        except (OSError, ValueError, TypeError, AttributeError) as error:
+            die(f"配置读取失败：{error}", 2)
+    runs = load_runs(path, args["engine"].lower())
+    want = {k: args.get(k, "") if k == "agent" else args.get(k, "").lower() for k in KEYS}
+
+    keys = [k for k in KEYS if args.get(k)]
+    levels = [keys]
+    for drop in DROP_ORDER:
+        if any(k in keys for k in drop):
+            keys = [k for k in keys if k not in drop]
+            levels.append(keys)
+
+    # 停在第一个够 MIN_RUNS 次的级别；都不够就用最宽的一级（只剩 engine）
+    for keys in levels:
+        secs = sorted(s for s, run in runs
+                      if all(want[k] in run[k] if k == "task" else run[k] == want[k] for k in keys))
+        if len(secs) >= MIN_RUNS:
+            break
+    if not secs:
+        die(f"没有可参考的记录：{path} 里没有 engine={args['engine']} 的成功运行"
+            "（exit_code 为 0 且有 duration_s），无法估计", 1)
+
+    med, p80 = quantile(secs, 0.5), quantile(secs, 0.8)
+    head = "预计不到 1 分钟" if med < 60 else f"预计约 {half_up(med / 60)} 分钟"
+    cond = " ".join([f"engine={show(args['engine'])}"] +
+                    [("task~" if k == "task" else k + "=") + show(args[k]) for k in keys])
+    note = "；样本少，仅供参考" if len(secs) < MIN_RUNS else ""
+    print(f"{head}（同类 {len(secs)} 次：中位 {fmt(med)}，P80 {fmt(p80)}，"
+          f"最长 {fmt(secs[-1])}；匹配条件：{cond}{note}）")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
