@@ -877,6 +877,36 @@ class WatcherTest(unittest.TestCase):
         self.assertIn("--policy", result.stderr)
         self.assertEqual(result.stdout, "")
 
+    def test_64_file_outbox_errors_use_retry_backoff(self):
+        self.append(event("file-retry"))
+        for failure in ("mkdir", "atomic_json"):
+            with self.subTest(failure=failure):
+                self.state = self.root / (failure + "-state")
+                outbox = self.root / (failure + "-outbox")
+                if failure == "mkdir":
+                    outbox.write_text("regular file", encoding="utf-8")
+                else:
+                    outbox.mkdir()
+                    (outbox / "file-retry.tmp").mkdir()
+                with self.watcher("--transport", "file", "--outbox", str(outbox)) as watcher, \
+                        mock.patch.object(MODULE.time, "time", return_value=1000) as clock:
+                    watcher.tick()
+                    status, attempts, next_attempt, error = watcher.db.execute(
+                        "SELECT status,attempts,next_attempt,last_error FROM events").fetchone()
+                    self.assertEqual((status, attempts, error), ("pending", 1, "文件写入失败"))
+                    self.assertEqual(next_attempt, 1000 + watcher.args.retry_base)
+                    watcher.tick()  # 退避尚未到期，不应重复投递。
+                    self.assertEqual(self.rows(), [("file-retry", "pending", 1)])
+                    clock.return_value = next_attempt
+                    watcher.tick()
+                    self.assertEqual(self.rows(), [("file-retry", "pending", 2)])
+                    retry_at = watcher.db.execute("SELECT next_attempt FROM events").fetchone()[0]
+                    self.assertEqual(retry_at, next_attempt + watcher.args.retry_max)
+                logs = [json.loads(row) for row in (self.state / "events.jsonl").read_text().splitlines()]
+                failures = [row for row in logs if row["event"] == "投递失败待补报"]
+                self.assertEqual([row["reason"] for row in failures], ["文件写入失败"] * 2)
+                self.assertEqual([row["retry_in_seconds"] for row in failures], [0.03, 0.06])
+
 
 if __name__ == "__main__":
     # 避免测试 import 在工作目录产生缓存文件。

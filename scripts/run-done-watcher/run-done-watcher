@@ -310,8 +310,11 @@ class Watcher:
         if self.args.transport == "file":
             # 离线产物仅含默认完成事件；不读取任何 webhook 环境值。
             outbox = Path(self.args.outbox)
-            outbox.mkdir(mode=0o700, parents=True, exist_ok=True)
-            atomic_json(outbox / (run_id + ".json"), json.loads(payload))
+            try:
+                outbox.mkdir(mode=0o700, parents=True, exist_ok=True)
+                atomic_json(outbox / (run_id + ".json"), json.loads(payload))
+            except OSError:
+                return "文件写入失败"
             return None
         route = self.config[agent]
         endpoint = os.environ.get(route["url_env"])
