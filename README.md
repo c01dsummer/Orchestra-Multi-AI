@@ -33,7 +33,7 @@ Orchestra-Multi-AI/
 │  ├─ projects.md
 │  ├─ CHANGELOG.md             # 配置内容版本
 │  ├─ private-words.txt
-│  └─ profiles/                # 两份完整设定示例
+│  └─ profiles/                # 8 名虚构成员的完整设定示例
 ├─ scripts/
 │  ├─ check.sh                 # 本地检查入口
 │  ├─ check.py                 # 严格校验实现，仅用标准库
@@ -108,7 +108,7 @@ bash scripts/export.sh
 bash scripts/export.sh orchestra-share.tar.gz
 ```
 
-默认生成 `orchestra-v1.tar.gz`，已有同名文件时报错。导出前先自检，只打包公开目录白名单；排除 `.git`、`config`、缓存、运行状态和构建产物。导出包以 `orchestra/` 为顶层目录，解压后可直接运行自检。
+默认生成 `orchestra-v1.tar.gz`，已有同名文件时报错。导出前先自检，只打包 `scripts/export.sh` 逐项列出的公开文件；发现清单外的源文件时拒绝导出。`.git`、`config`、缓存、运行状态和构建产物按自检相同边界忽略，均不打包。新增公开文件时须同步更新清单。导出包以 `orchestra/` 为顶层目录，解压后可直接运行自检。
 
 通知组件见 [使用说明](tools/run-done-watcher/README.md)。原有接口和离线测试保留，新增标准测试发现入口：
 

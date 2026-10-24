@@ -11,34 +11,45 @@ python3 -I -B - "$script_dir/.." "${1:-orchestra-v1.tar.gz}" <<'PY'
 import gzip
 import os
 from pathlib import Path
+import runpy
 import sys
 import tarfile
 
 root = Path(sys.argv[1]).resolve()
 output = Path(sys.argv[2])
-# Explicit public roots prevent unrelated local files from entering the archive.
+# Every exported file is explicitly approved; never recurse through local directories.
 public = ("README.md", "SKILL.md", "CHANGELOG.md", "LICENSE", ".gitignore",
-          "roles", "process", "routing", "examples", "scripts", "tools", ".github")
-excluded = {".git", "config", "private", "__pycache__", ".pytest_cache", ".venv",
-            "node_modules", "build", "dist"}
+          ".github/workflows/format-check.yml",
+          "roles/README.md", "roles/调度.md", "roles/开发.md", "roles/复审.md", "roles/调研.md",
+          "roles/平台对接.md", "roles/审批.md", "roles/用量.md", "roles/配置管理.md",
+          "process/README.md", "process/dispatch.md", "process/handoff.md", "process/review.md",
+          "process/merge.md", "process/change-rules.md", "process/sync.md",
+          "routing/FORMAT.md", "routing/template.rules.json",
+          "examples/README.md", "examples/team.json", "examples/rules.json", "examples/projects.md",
+          "examples/CHANGELOG.md", "examples/private-words.txt",
+          "examples/profiles/巡检员.md", "examples/profiles/代码员.md", "examples/profiles/把关员.md",
+          "examples/profiles/检索员.md", "examples/profiles/联络员.md", "examples/profiles/核准员.md",
+          "examples/profiles/记账员.md", "examples/profiles/管理员.md",
+          "scripts/check.sh", "scripts/check.py", "scripts/export.sh",
+          "tools/run-done-watcher/README.md", "tools/run-done-watcher/.gitignore",
+          "tools/run-done-watcher/config.example.json", "tools/run-done-watcher/run-done-watcher",
+          "tools/run-done-watcher/watcher.py", "tools/run-done-watcher/test_selftest.py",
+          "tools/run-done-watcher/selftest.py", "tools/run-done-watcher/check-heartbeat.py",
+          "tools/run-done-watcher/reconcile.py", "tools/run-done-watcher/reconcile.config.example.json")
 
 
 def members():
+    # Reuse the checker's runtime exclusions, and reject any unapproved source file.
+    files_under = runpy.run_path(str(root / "scripts/check.py"))["files_under"]
+    approved = set(public)
+    if any(path.relative_to(root).as_posix() not in approved for path, _ in files_under(root)):
+        raise ValueError()
     for entry in public:
-        base = root / entry
-        if base.is_file():
-            yield base
-            continue
-        for current, dirs, files in os.walk(base, followlinks=False):
-            dirs[:] = sorted(name for name in dirs if name not in excluded and not name.startswith("state"))
-            for name in sorted(files):
-                path = Path(current) / name
-                if (name in excluded or name.startswith(".env")
-                        or name.endswith((".pyc", ".pyo", ".tmp", ".log", ".tar.gz", ".jsonl", ".sqlite3"))):
-                    continue
-                if path.is_symlink() or not path.is_file():
-                    raise ValueError()
-                yield path
+        path = root / entry
+        if (not path.is_file() or any(part.is_symlink() for part in (path, *path.parents))
+                or not path.resolve().is_relative_to(root)):
+            raise ValueError()
+        yield path
 
 
 created = False

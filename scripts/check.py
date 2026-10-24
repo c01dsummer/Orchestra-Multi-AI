@@ -12,8 +12,11 @@ from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
 ROLES = ("调度", "开发", "复审", "调研", "平台对接", "审批", "用量", "配置管理")
+AUTHOR_ROLES = {"开发", "调研", "配置管理"}
 PROCESSES = ("dispatch", "handoff", "review", "merge", "change-rules", "sync")
-SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", ".venv", "node_modules", "build", "dist"}
+SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", ".venv", "node_modules", "build", "dist", "state"}
+SKIP_SUFFIXES = (".pyc", ".pyo", ".tar.gz", ".tmp", ".sqlite3", ".sqlite3-shm",
+                 ".sqlite3-wal", ".lock", ".jsonl", ".log")
 
 
 def fail(message):
@@ -66,7 +69,7 @@ def core_files():
     files += ["process/" + process + ".md" for process in PROCESSES]
     files += ["tools/run-done-watcher/" + name for name in (
         "README.md", ".gitignore", "run-done-watcher", "check-heartbeat.py", "reconcile.py",
-        "config.example.json", "reconcile.config.example.json", "selftest.py", "test_selftest.py")]
+        "config.example.json", "reconcile.config.example.json", "watcher.py", "selftest.py", "test_selftest.py")]
     directories = ("roles", "routing", "process", "examples", "examples/profiles",
                    "scripts", "tools/run-done-watcher")
     require(all((ROOT / path).is_file() for path in files)
@@ -121,11 +124,13 @@ def team(path, table):
         require(isinstance(member, dict) and nonempty(member.get("name"))
                 and member["name"] not in names and member.get("role") in ROLES
                 and nonempty(member.get("description")), "成员名称、角色或职责无效或重名。")
+        require(member["name"] not in (".", "..")
+                and not any(char in member["name"] for char in "/\\"), "成员名称必须可用作设定文件名。")
         engines = member.get("engines")
         require(isinstance(engines, list) and bool(engines) and all(engine(item) for item in engines)
                 and len(engines) == len(set(engines)), "成员引擎列表无效或重复。")
-        if member["role"] == "开发":
-            require(set(engines) <= table["reviewers"].keys(), "开发角色的引擎缺少作者复审配对。")
+        if member["role"] in AUTHOR_ROLES:
+            require(set(engines) <= table["reviewers"].keys(), "作者角色的引擎缺少作者复审配对。")
         names.add(member["name"])
         available.update(engines)
     referenced = set(table["reviewers"])
@@ -134,6 +139,21 @@ def team(path, table):
                       for candidate in route["candidates"])
     require(referenced <= available, "规则表引擎与团队可用引擎不一致。")
     require(not re.search(r"〈[^〉]*〉", json.dumps(data, ensure_ascii=False)), "团队名单仍有未替换占位符。")
+    return names
+
+
+def configuration(directory):
+    for name in ("team.json", "rules.json", "projects.md", "CHANGELOG.md"):
+        path = directory / name
+        require(path.is_file() and bool(path.read_text(encoding="utf-8").strip()),
+                "配置必需文件缺失或为空。")
+    profiles = directory / "profiles"
+    require(profiles.is_dir() and not profiles.is_symlink(), "配置设定目录缺失或无效。")
+    names = team(directory / "team.json", rules(directory / "rules.json"))
+    for name in names:
+        profile = profiles / (name + ".md")
+        require(profile.is_file() and not profile.is_symlink()
+                and bool(profile.read_text(encoding="utf-8").strip()), "团队成员的完整设定缺失或为空。")
 
 
 def front_value(lines, key):
@@ -195,9 +215,10 @@ def files_under(directory):
         for name in dirs + files:
             require(not (Path(current) / name).is_symlink(), "检查范围含符号链接，请使用普通文件。")
         dirs[:] = sorted(name for name in dirs if name not in SKIP_DIRS
+                         and not name.startswith(("state-", "state_"))
                          and not (Path(current) == ROOT and name == "config"))
         for name in sorted(files):
-            if name == ".git" or name.endswith((".pyc", ".pyo", ".tar.gz", ".tmp", ".log")):
+            if name == ".git" or name.endswith(SKIP_SUFFIXES):
                 continue
             path = Path(current) / name
             yield path, path.read_bytes()
@@ -224,7 +245,7 @@ def privacy():
         r'(?i)\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|password|secret)\b\s*[:=]\s*[A-Za-z0-9+/=_-]{16,}(?=\s|$)',
     ]
     path_patterns = [
-        r'(?:/home|/Users|/workspace|/root|/mnt|/Volumes)/[A-Za-z0-9_.-]+(?:/[^\s`\"\'<>]*)?',
+        r'(?<![\w./:~%\\-])/(?:home|Users|workspace|root|mnt|Volumes|tmp|var|opt|srv|etc|proc)(?=/|[\s`\"\'<>()\[\]{},;:]|$)',
         r'(?i)\b[A-Z]:[\\/][^\s`\"\'<>]+',
         r'~[\\/][^\s`\"\'<>]+',
         r'\\\\[A-Za-z0-9_.-]+\\[^\s`\"\'<>]+',
@@ -235,10 +256,9 @@ def privacy():
     for path, raw in generic:
         name = path.relative_to(ROOT).as_posix()
         text = raw.decode("utf-8", errors="replace")
-        # A verbatim copied demonstration dictionary is input, not a private leak.
-        # Environment-supplied words always scan the entire public content.
-        word_content = "" if (source == "config" and name == "examples/private-words.txt"
-                              and text == word_text) else text
+        # The public demonstration dictionary is allowed to contain its own entries.
+        # Its filename, key-like strings and machine paths are still checked.
+        word_content = "" if name == "examples/private-words.txt" else text
         require(not any(word in name.casefold() or word in word_content.casefold() for word in words),
                 "公开部分命中禁用词；内容不输出。")
     private = list(files_under(ROOT / "config")) if (ROOT / "config").is_dir() else []
@@ -257,11 +277,11 @@ def main():
     require(sys.version_info >= (3, 10), "需要 Python 3.10 或更新版本。")
     core_files()
     rules(ROOT / "routing/template.rules.json", template=True)
-    team(ROOT / "examples/team.json", rules(ROOT / "examples/rules.json"))
+    configuration(ROOT / "examples")
     config = ROOT / "config"
     if config.exists():
         require(config.is_dir() and not config.is_symlink(), "config 必须是本地普通目录。")
-        team(config / "team.json", rules(config / "rules.json"))
+        configuration(config)
         print("通过：本地配置、虚构示例及空白模板的严格 JSON 校验。")
     else:
         print("提示：尚未创建 config/，本次校验示例；实际接活前请复制并修改配置。")

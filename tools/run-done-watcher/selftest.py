@@ -22,7 +22,7 @@ from unittest import mock
 
 
 SCRIPT = Path(__file__).with_name("run-done-watcher")
-LOADER = importlib.machinery.SourceFileLoader("run_done_watcher", str(SCRIPT))
+LOADER = importlib.machinery.SourceFileLoader("run_done_watcher", str(SCRIPT.with_name("watcher.py")))
 SPEC = importlib.util.spec_from_loader(LOADER.name, LOADER)
 MODULE = importlib.util.module_from_spec(SPEC)
 LOADER.exec_module(MODULE)

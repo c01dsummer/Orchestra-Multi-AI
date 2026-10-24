@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-      # out.md 第109行：仅下面四项；没有同步、发布或修改线上设定。
+      # 仅检查表格、技能入口、禁用词及密钥与路径，不执行同步或发布。
       - name: 检查表格、技能入口、禁用词、密钥和路径
         shell: bash
         env:
@@ -89,8 +89,10 @@ jobs:
                           raise ValueError()
                   if scope == 'config' and 'config/rules.json' not in contract:
                       raise ValueError()
-                  # Every rules*.json is covered; the contract may also name differently named templates.
+                  # Every rules*.json and the public template must have a required-field contract.
                   known_rules = {n for n in tables if re.search(r'(^|/)rules(?:[._-][^/]*)?\.json$', n)}
+                  if scope == 'public':
+                      known_rules.add('routing/template.rules.json')
                   if scope == 'public' and 'routing/template.rules.json' in contract:
                       for name in known_rules:
                           contract.setdefault(name, contract['routing/template.rules.json'])
@@ -214,7 +216,7 @@ jobs:
                   r'(?i)\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|password|secret)\b\s*[:=]\s*[A-Za-z0-9+/=_-]{16,}(?=\s|$)',
               ]
               path_patterns = [
-                  r'(?:/home|/Users|/workspace|/root|/mnt|/Volumes)/[A-Za-z0-9_.-]+(?:/[^\s`\"\'<>]*)?',
+                  r'(?<![\w./:~%\\-])/(?:home|Users|workspace|root|mnt|Volumes|tmp|var|opt|srv|etc|proc)(?=/|[\s`\"\'<>()\[\]{},;:]|$)',
                   r'(?i)\b[A-Z]:[\\/][^\s`\"\'<>]+',
                   r'~[\\/][^\s`\"\'<>]+',
                   r'\\\\[A-Za-z0-9_.-]+\\[^\s`\"\'<>]+',
