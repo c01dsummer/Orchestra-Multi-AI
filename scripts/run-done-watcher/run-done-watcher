@@ -1,0 +1,514 @@
+#!/usr/bin/env python3
+"""只读完成账本，将最小事件持久化后投递。所有时间使用 Asia/Shanghai。"""
+
+import argparse
+import datetime as dt
+import fcntl
+import hashlib
+import http.client
+import json
+import os
+from pathlib import Path
+import re
+import signal
+import sqlite3
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+
+TZ = dt.timezone(dt.timedelta(hours=8), name="Asia/Shanghai")
+MAX_LINE = 1024 * 1024
+RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}\Z")
+ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+STOP = False
+
+
+def now():
+    return dt.datetime.now(TZ).isoformat(timespec="seconds")
+
+
+def encode(value):
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def atomic_json(path, value):
+    temp = path.with_suffix(".tmp")
+    with temp.open("w", encoding="utf-8") as stream:
+        stream.write(encode(value) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temp, path)
+    fd = os.open(str(path.parent), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+class CursorHistoryConflict(ValueError):
+    """已有游标时拒绝首次历史扫描参数。"""
+
+
+class PendingHistoryConflict(ValueError):
+    """固定的安全启动错误，不携带外部输入。"""
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+class Watcher:
+    def __init__(self, args, sender=None):
+        self.args = args
+        self.state = Path(args.state_dir)
+        self.state.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.lock = (self.state / "watcher.lock").open("a")
+        try:
+            fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            self.lock.close()
+            raise ValueError("该状态目录已有 watcher 持锁") from None
+        self.db = None
+        try:
+            # 配置只保存环境变量名，URL、请求头及可选请求模板均不落状态。
+            config = json.loads(Path(args.config).read_text(encoding="utf-8"))
+            if not isinstance(config, dict) or not config:
+                raise ValueError("配置须为非空 agent 到环境变量名的映射")
+            for agent, route in list(config.items()):
+                if (not isinstance(agent, str) or not agent or len(agent) > 100
+                        or any(ord(c) < 32 for c in agent)):
+                    raise ValueError("配置中的助手名无效")
+                if isinstance(route, str):
+                    route = {"url_env": route}  # 兼容初稿；新部署应使用示例中的对象。
+                if (not isinstance(route, dict) or "url_env" not in route
+                        or set(route) - {"url_env", "headers_env", "body_template_env"}
+                        or not all(isinstance(v, str) and ENV_NAME.fullmatch(v)
+                                   for v in route.values())):
+                    raise ValueError("配置中的路由须仅含环境变量名")
+                config[agent] = route
+            self.config = config
+            self.db = sqlite3.connect(str(self.state / "state.sqlite3"))
+            self.db.execute("PRAGMA synchronous=FULL")
+            self.db.executescript("""
+                CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS events(
+                    run_id TEXT PRIMARY KEY, agent TEXT NOT NULL,
+                    payload TEXT NOT NULL, status TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    next_attempt REAL NOT NULL DEFAULT 0,
+                    created_at REAL NOT NULL, delivered_at TEXT, last_error TEXT);
+            """)
+            mode = self.mode()
+            binding = encode({"mode": mode, "ledger": str(Path(args.ledger).resolve()),
+                              "config": config, "schema": 2,
+                              "outbox": str(Path(args.outbox).resolve()) if args.transport == "file" else None})
+            previous = self.get("binding")
+            if previous is not None and previous != binding:
+                raise ValueError("状态目录绑定的模式、账本或配置不一致，请使用独立状态目录")
+            if args.start_at_end and self.get("cursor") is not None:
+                raise ValueError("--start-at-end 只允许用于尚无游标的新状态")
+            if args.allow_history and self.get("start_at_end_pending") is not None:
+                raise PendingHistoryConflict()
+            if args.allow_history and self.get("cursor") is not None:
+                raise CursorHistoryConflict()
+            if args.start_at_end and args.allow_history:
+                raise ValueError("接入边界参数互斥")
+            if (mode == "http" and self.get("cursor") is None
+                    and self.get("start_at_end_pending") is None
+                    and not args.start_at_end and not args.allow_history):
+                raise ValueError("HTTP 无游标须显式选择接入边界")
+            with self.db:
+                self.put("binding", binding)
+                if self.get("cursor") is None:
+                    if args.start_at_end:
+                        self.put("start_at_end_pending", "1")
+                    elif previous is not None and self.get("start_at_end_pending") is None and not args.allow_history:
+                        raise ValueError("已有绑定但无首次接入边界，须显式 --start-at-end")
+            if args.ack_anomalies:
+                with self.db:
+                    self.put("anomaly_baseline", encode(self.anomaly_counts()))
+                    self.put("reviewed_at", now())
+                self.log("人工确认累计异常")
+            # 不使用系统代理，也不自动跟随重定向，以免地址或事件被转交他处。
+            self.http = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+            self.sender = sender if sender is not None else self.send_http
+            self.ledger_ok = False
+            self.once_limit = None
+        except Exception:
+            self.close()
+            raise
+
+    def close(self):
+        if self.db is not None:
+            self.db.close()
+        self.lock.close()
+
+    def mode(self):
+        return "dry-run" if self.args.dry_run else self.args.transport
+
+    def get(self, key):
+        row = self.db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return row[0] if row else None
+
+    def put(self, key, value):
+        self.db.execute("INSERT OR REPLACE INTO meta VALUES(?, ?)", (key, value))
+
+    def count(self, key):
+        self.put(key, str(int(self.get(key) or 0) + 1))
+
+    def log(self, event, **fields):
+        # 只传入受控字段；绝不记录 URL、环境值、异常原文、账本原文或 HTTP 响应。
+        with (self.state / "events.jsonl").open("a", encoding="utf-8") as stream:
+            stream.write(encode({"time": now(), "event": event, **fields}) + "\n")
+
+    @staticmethod
+    def anchor(stream, offset):
+        stream.seek(max(0, offset - 128))
+        return hashlib.sha256(stream.read(min(offset, 128))).hexdigest()
+
+    @staticmethod
+    def end_boundary(stream, size):
+        # 首次从末尾接入时保留尚未写完的半行，不能从半行中间开始解析。
+        end = size
+        while end:
+            begin = max(0, end - 8192)
+            stream.seek(begin)
+            data = stream.read(end - begin)
+            index = data.rfind(b"\n")
+            if index >= 0:
+                return begin + index + 1
+            end = begin
+        return 0
+
+    def ingest(self):
+        try:
+            stream = open(self.args.ledger, "rb")
+        except OSError:
+            self.ledger_ok = False
+            self.log("账本不可读")
+            return
+        with stream, self.db:
+            info = os.fstat(stream.fileno())
+            if self.args.once and self.once_limit is None:
+                self.once_limit = info.st_size
+            raw_cursor = self.get("cursor")
+            cursor = json.loads(raw_cursor) if raw_cursor else None
+            offset = 0
+            if cursor:
+                same = (cursor["dev"] == info.st_dev and cursor["ino"] == info.st_ino
+                        and cursor["offset"] <= info.st_size)
+                if same:
+                    same = self.anchor(stream, cursor["offset"]) == cursor["anchor"]
+                if same:
+                    offset = cursor["offset"]
+                else:
+                    self.count("ledger_resets")
+                    self.log("账本替换或截断", action="从当前文件头重扫，旧文件未读部分需核实")
+            elif self.args.start_at_end or self.get("start_at_end_pending"):
+                offset = self.end_boundary(stream, info.st_size)
+                self.log("首次从末尾接入", offset=offset)
+            elif self.args.allow_history and self.mode() == "http":
+                self.log("显式允许历史扫描")
+            stream.seek(offset)
+            for _ in range(self.args.batch_size):
+                line_start = stream.tell()
+                if self.once_limit is not None and line_start >= self.once_limit:
+                    break
+                read_limit = min(MAX_LINE + 1, self.once_limit - line_start) if self.once_limit is not None else MAX_LINE + 1
+                line = stream.readline(read_limit)
+                if not line:
+                    break
+                oversized = len(line) > MAX_LINE
+                complete = line.endswith(b"\n")
+                while oversized and not complete:
+                    remaining = self.once_limit - stream.tell() if self.once_limit is not None else MAX_LINE + 1
+                    chunk = stream.readline(min(MAX_LINE + 1, remaining))
+                    if not chunk:
+                        break
+                    complete = chunk.endswith(b"\n")
+                if not complete:
+                    # 半行不移动游标；后续补齐换行后重新读取。
+                    break
+                offset = stream.tell()
+                if oversized:
+                    self.bad_line(line_start, "行过长")
+                    continue
+                try:
+                    record = json.loads(line)
+                    valid = (isinstance(record, dict)
+                             and isinstance(record.get("run_id"), str)
+                             and RUN_ID.fullmatch(record["run_id"])
+                             and isinstance(record.get("agent"), str)
+                             and 0 < len(record["agent"]) <= 100
+                             and isinstance(record.get("end_time"), str)
+                             and type(record.get("exit_code")) is int)
+                    if not valid:
+                        raise ValueError()
+                    ended = dt.datetime.fromisoformat(record["end_time"].replace("Z", "+00:00"))
+                    if ended.tzinfo is None:
+                        raise ValueError()
+                except (ValueError, UnicodeError, RecursionError):
+                    self.bad_line(line_start, "JSON 或完成字段无效")
+                    continue
+                run_id, agent = record["run_id"], record["agent"]
+                payload = encode({"event": "run_done", "event_id": "run_done:" + run_id,
+                                  "run_id": run_id, "agent": agent,
+                                  "end_time": ended.astimezone(TZ).isoformat(),
+                                  "exit_code": record["exit_code"]})
+                status = ("ignored" if agent not in self.config else
+                          "dry-run" if self.args.dry_run else "pending")
+                result = self.db.execute(
+                    "INSERT OR IGNORE INTO events(run_id,agent,payload,status,created_at) "
+                    "VALUES(?,?,?,?,?)", (run_id, agent, payload, status, time.time()))
+                if result.rowcount:
+                    self.log("发现完成事件", run_id=run_id, agent=agent, status=status,
+                             exit_code=record["exit_code"], end_time=ended.astimezone(TZ).isoformat(),
+                             offset=line_start)
+                else:
+                    existing = self.db.execute("SELECT agent,payload FROM events WHERE run_id=?", (run_id,)).fetchone()
+                    if existing != (agent, payload):
+                        self.count("conflicting_events")
+                        self.log("重复标识内容冲突", run_id=run_id)
+                    self.log("重复事件", run_id=run_id)
+            self.put("cursor", encode({"dev": info.st_dev, "ino": info.st_ino,
+                                       "offset": offset, "anchor": self.anchor(stream, offset)}))
+            self.db.execute("DELETE FROM meta WHERE key='start_at_end_pending'")
+            self.ledger_ok = True
+
+    def bad_line(self, offset, reason):
+        self.count("invalid_lines")
+        self.log("跳过坏行", offset=offset, reason=reason)
+
+    def send_http(self, request, timeout):
+        """唯一联网边界；测试注入同签名假函数，返回 HTTP 状态码或抛出连接异常。"""
+        with self.http.open(request, timeout=timeout) as response:
+            return response.status
+
+    @staticmethod
+    def render_template(value, event):
+        if isinstance(value, str):
+            if value == "$event":
+                return event
+            if value.startswith("$$"):
+                return value[1:]
+            if value.startswith("$"):
+                if value[1:] not in {"run_id", "event_id", "agent", "end_time", "exit_code"}:
+                    raise ValueError("未知模板占位符")
+                return event[value[1:]]
+            return value
+        if isinstance(value, list):
+            return [Watcher.render_template(v, event) for v in value]
+        if isinstance(value, dict):
+            return {k: Watcher.render_template(v, event) for k, v in value.items()}
+        return value
+
+    def post(self, agent, run_id, payload):
+        if self.args.transport == "file":
+            # 离线产物仅含默认完成事件；不读取任何 webhook 环境值。
+            outbox = Path(self.args.outbox)
+            outbox.mkdir(mode=0o700, parents=True, exist_ok=True)
+            atomic_json(outbox / (run_id + ".json"), json.loads(payload))
+            return None
+        route = self.config[agent]
+        endpoint = os.environ.get(route["url_env"])
+        if not endpoint:
+            return "未配置地址"
+        try:
+            parts = urllib.parse.urlsplit(endpoint)
+            if (not parts.hostname or parts.username is not None or parts.password is not None
+                    or parts.fragment or parts.scheme != "https"):
+                return "地址格式不允许"
+            headers = {"Content-Type": "application/json; charset=utf-8",
+                       "Idempotency-Key": "run_done:" + run_id}
+            if "headers_env" in route:
+                raw = os.environ.get(route["headers_env"])
+                if raw is None:
+                    return "未配置请求头"
+                supplied = json.loads(raw)
+                if (not isinstance(supplied, dict) or not all(
+                        isinstance(k, str) and re.fullmatch(r"[A-Za-z0-9!#$%&'*+.^_`|~-]+", k)
+                        and k.lower() not in {"host", "content-length", "transfer-encoding", "connection"}
+                        and isinstance(v, str) and all(32 <= ord(c) < 127 for c in v)
+                        for k, v in supplied.items())):
+                    return "请求头格式无效"
+                for key, value in supplied.items():
+                    headers = {k: v for k, v in headers.items() if k.lower() != key.lower()}
+                    headers[key] = value
+            if "body_template_env" in route:
+                raw = os.environ.get(route["body_template_env"])
+                if raw is None:
+                    return "未配置请求模板"
+                template = json.loads(raw)
+                payload = encode(self.render_template(template, json.loads(payload)))
+            request = urllib.request.Request(
+                endpoint, data=payload.encode("utf-8"), method="POST",
+                headers=headers)
+            status = self.sender(request, self.args.http_timeout)
+            return None if 200 <= status < 300 else "HTTP_" + str(status)
+        except urllib.error.HTTPError as error:
+            code = error.code
+            error.close()
+            return "HTTP_" + str(code)
+        except (urllib.error.URLError, OSError, ValueError, UnicodeError,
+                http.client.HTTPException, RecursionError):
+            return "连接或地址错误"
+
+    def deliver(self, cutoff=None):
+        if self.args.dry_run:
+            return
+        ready = self.db.execute(
+            "SELECT run_id,agent,payload,attempts FROM events "
+            "WHERE status='pending' AND next_attempt<=? ORDER BY created_at,run_id LIMIT ?",
+            (time.time() if cutoff is None else cutoff, self.args.batch_size)).fetchall()
+        for run_id, agent, payload, attempts in ready:
+            if STOP:
+                break
+            error = self.post(agent, run_id, payload)
+            with self.db:
+                if error is None:
+                    self.db.execute("UPDATE events SET status='delivered', attempts=attempts+1, "
+                                    "delivered_at=?,last_error=NULL WHERE run_id=?", (now(), run_id))
+                    self.log("文件投递成功" if self.args.transport == "file" else "投递成功",
+                             run_id=run_id, agent=agent)
+                else:
+                    # 失败队列不丢弃；退避到上限后持续低频重试。
+                    delay = min(self.args.retry_max,
+                                self.args.retry_base * (2 ** min(attempts, 30)))
+                    self.db.execute("UPDATE events SET attempts=attempts+1,next_attempt=?, "
+                                    "last_error=? WHERE run_id=?", (time.time() + delay, error, run_id))
+                    self.log("投递失败待补报", run_id=run_id, agent=agent,
+                             attempt=attempts + 1, retry_in_seconds=delay, reason=error)
+            self.heartbeat()
+
+    def anomaly_counts(self):
+        counts = {key: int(self.get(key) or 0)
+                  for key in ("invalid_lines", "ledger_resets", "conflicting_events")}
+        counts["unknown_agents"] = sum(n for agent, n in self.db.execute(
+            "SELECT agent, COUNT(*) FROM events WHERE status='ignored' GROUP BY agent")
+            if agent not in self.args.ignore_agent)
+        return counts
+
+    def unreviewed(self):
+        baseline = json.loads(self.get("anomaly_baseline") or "{}")
+        return {key: max(0, value - baseline.get(key, 0))
+                for key, value in self.anomaly_counts().items()}
+
+    def heartbeat(self):
+        pending, failed, oldest = self.db.execute(
+            "SELECT COUNT(*),COALESCE(SUM(attempts>0),0),MIN(created_at) "
+            "FROM events WHERE status='pending'").fetchone()
+        ignored = self.db.execute("SELECT COUNT(*) FROM events WHERE status='ignored'").fetchone()[0]
+        conflicts = int(self.get("conflicting_events") or 0)
+        exhausted = self.db.execute("SELECT COUNT(*) FROM events WHERE status='pending' AND attempts>=5").fetchone()[0]
+        invalid = int(self.get("invalid_lines") or 0)
+        resets = int(self.get("ledger_resets") or 0)
+        atomic_json(self.state / "heartbeat.json", {
+            "updated_at": now(), "timezone": "Asia/Shanghai", "pid": os.getpid(),
+            "mode": self.mode(), "ledger_readable": self.ledger_ok,
+            "health": "正常" if self.ledger_ok and not (failed or any(self.unreviewed().values())) else "需检查",
+            "pending": pending, "failed_pending": failed,
+            "unreviewed_anomalies": self.unreviewed(), "reviewed_at": self.get("reviewed_at"),
+            "ignored": ignored, "conflicting_events": conflicts, "retry_alert_count": exhausted,
+            "oldest_pending_age_seconds": round(max(0, time.time() - oldest), 1) if oldest else 0,
+            "invalid_lines": invalid, "ledger_resets": resets,
+            "cursor": json.loads(self.get("cursor")) if self.get("cursor") else None,
+            "stopping": STOP})
+
+    def tick(self):
+        self.ingest()
+        self.heartbeat()
+        self.deliver()
+        self.heartbeat()
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="run 完成事件 watcher（仅用 Python 3 标准库）")
+    parser.add_argument("--ledger", required=True, help="只读 JSONL 完成账本")
+    parser.add_argument("--state-dir", required=True, help="私有持久状态目录")
+    parser.add_argument("--config", required=True, help="agent → URL、请求头、可选请求模板环境变量名的 JSON 映射")
+    parser.add_argument("--dry-run", action="store_true", help="只记事件，不读 URL、不 POST")
+    parser.add_argument("--once", action="store_true", help="读完当前完整行并尝试一次到期队列后退出")
+    parser.add_argument("--transport", choices=("http", "file"), default="http",
+                        help="http 正式 POST；file 仅写默认事件，不读取 webhook 环境值")
+    parser.add_argument("--outbox", help="file 模式的事件输出目录；必须配合 --transport file")
+    parser.add_argument("--start-at-end", action="store_true", help="新状态首次跳过已有完整行（须先对账）")
+    parser.add_argument("--allow-history", action="store_true", help="显式允许无游标时扫描历史；与末尾接入互斥")
+    parser.add_argument("--ignore-agent", action="append", default=[], help="显式确认范围外助手，仅记信息；可重复")
+    parser.add_argument("--ack-anomalies", action="store_true", help="人工调查后确认当前累计异常，保留原计数；不确认未送达队列")
+    parser.add_argument("--interval", type=float, default=2, help="本地检查间隔秒数，默认 2")
+    parser.add_argument("--retry-base", type=float, default=5, help="初始重试间隔秒数，默认 5")
+    parser.add_argument("--retry-max", type=float, default=300, help="重试间隔上限秒数，默认 300")
+    parser.add_argument("--http-timeout", type=float, default=10, help="HTTP 超时秒数，默认 10")
+    parser.add_argument("--batch-size", type=int, default=100, help="每批行数/投递数，默认 100")
+    args = parser.parse_args()
+    if (args.transport == "file") != bool(args.outbox):
+        parser.error("file 模式必须指定 --outbox，http 模式不得指定")
+    if (not all(0 < n < float("inf") for n in
+                (args.interval, args.retry_base, args.retry_max, args.http_timeout))
+            or args.retry_base > args.retry_max or args.batch_size <= 0):
+        parser.error("间隔、超时、批量须为正有限数，重试上限不得低于初始间隔")
+    return args
+
+
+def stop_handler(signum, frame):
+    global STOP
+    STOP = True
+
+
+def main(sender=None):
+    os.umask(0o077)
+    args = parse_args()
+    watcher = None
+    signal.signal(signal.SIGTERM, stop_handler)
+    signal.signal(signal.SIGINT, stop_handler)
+    try:
+        watcher = Watcher(args, sender=sender)
+        if args.once:
+            # --once 不受单批上限影响；等待半行补齐及退避到期需下次执行。
+            while not STOP:
+                before = watcher.get("cursor")
+                watcher.ingest()
+                watcher.heartbeat()
+                if watcher.get("cursor") == before:
+                    break
+            cutoff = time.time()
+            while not STOP:
+                ready = watcher.db.execute(
+                    "SELECT COUNT(*) FROM events WHERE status='pending' AND next_attempt<=?",
+                    (cutoff,)).fetchone()[0]
+                if not ready or args.dry_run:
+                    break
+                watcher.deliver(cutoff=cutoff)
+            watcher.heartbeat()
+            pending = watcher.db.execute("SELECT COUNT(*) FROM events WHERE status='pending'").fetchone()[0]
+            return 2 if pending or not watcher.ledger_ok or any(watcher.unreviewed().values()) else 0
+        while not STOP:
+            watcher.tick()
+            deadline = time.monotonic() + args.interval
+            while not STOP and time.monotonic() < deadline:
+                time.sleep(min(0.2, max(0, deadline - time.monotonic())))
+        watcher.heartbeat()
+        return 0
+    except CursorHistoryConflict:
+        print("watcher 拒绝启动：已有游标，--allow-history 只用于首次接入；补扫须使用人工核准的新独立状态目录。", file=sys.stderr)
+        return 1
+    except PendingHistoryConflict:
+        print("watcher 拒绝启动：已有 start_at_end_pending 末尾接入意图，不能使用 --allow-history。"
+              "请先人工核对历史回报与接入边界；继续末尾接入请去掉 --allow-history，"
+              "若需补扫历史，请保留原状态并使用经人工核准的新独立状态目录。", file=sys.stderr)
+        return 1
+    except Exception:
+        # 不输出异常原文，路径、HTTP 错误等可能夹带敏感值。
+        print("watcher 停止：配置、状态或文件操作失败；请检查权限、参数及单进程锁。", file=sys.stderr)
+        return 1
+    finally:
+        if watcher is not None:
+            watcher.close()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,4 @@
+private/
+state*/
+*.log
+__pycache__/
