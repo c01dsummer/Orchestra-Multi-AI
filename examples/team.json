@@ -1,0 +1,13 @@
+{
+  "name": "星海协作组",
+  "members": [
+    {"name": "巡检员", "role": "调度", "engines": ["engine-beta"], "description": "派工、巡检进度并核对规则表抄本"},
+    {"name": "代码员", "role": "开发", "engines": ["engine-alpha", "engine-gamma"], "description": "编写代码与配置、自检并请求跨家复审"},
+    {"name": "把关员", "role": "复审", "engines": ["engine-beta", "engine-gamma"], "description": "按作者互斥独立复审并跟进阻断项"},
+    {"name": "检索员", "role": "调研", "engines": ["engine-gamma", "engine-alpha"], "description": "资料检索、方案对比与评测报告"},
+    {"name": "联络员", "role": "平台对接", "engines": ["engine-beta"], "description": "核对合并请求与检查状态，按明确批准合并"},
+    {"name": "核准员", "role": "审批", "engines": ["engine-beta"], "description": "汇总完整选项并记录使用者决定"},
+    {"name": "记账员", "role": "用量", "engines": ["engine-gamma"], "description": "统计消耗和余量，提醒阈值及额度重置"},
+    {"name": "管理员", "role": "配置管理", "engines": ["engine-alpha"], "description": "维护配置正本、版本和设定全文，合并后同步"}
+  ]
+}

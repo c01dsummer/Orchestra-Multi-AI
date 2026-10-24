@@ -1,0 +1,8 @@
+/config/
+__pycache__/
+*.py[cod]
+*.tar.gz
+/build/
+/dist/
+*.tmp
+*.log

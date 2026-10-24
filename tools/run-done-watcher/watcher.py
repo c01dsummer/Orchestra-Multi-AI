@@ -34,6 +34,10 @@ def encode(value):
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
+def path_id(value):
+    return hashlib.sha256(os.fsencode(Path(value).resolve())).hexdigest()
+
+
 def atomic_json(path, value):
     temp = path.with_suffix(".tmp")
     with temp.open("w", encoding="utf-8") as stream:
@@ -103,9 +107,9 @@ class Watcher:
                     created_at REAL NOT NULL, delivered_at TEXT, last_error TEXT);
             """)
             mode = self.mode()
-            binding = encode({"mode": mode, "ledger": str(Path(args.ledger).resolve()),
-                              "config": config, "schema": 2,
-                              "outbox": str(Path(args.outbox).resolve()) if args.transport == "file" else None})
+            binding = encode({"mode": mode, "ledger_sha256": path_id(args.ledger),
+                              "config": config, "schema": 3,
+                              "outbox_sha256": path_id(args.outbox) if args.transport == "file" else None})
             previous = self.get("binding")
             if previous is not None and previous != binding:
                 raise ValueError("状态目录绑定的模式、账本或配置不一致，请使用独立状态目录")
