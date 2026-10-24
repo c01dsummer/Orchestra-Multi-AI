@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "name": "星海协作组示例规则表",
+  "description": "reviewers 指定各作者引擎允许的复审引擎；routes 列出任务候选顺序，运行失败才依约替补，质量不过先修复。所有名称均为虚构。",
+  "reviewers": {
+    "engine-alpha": ["engine-beta", "engine-gamma"],
+    "engine-beta": ["engine-alpha", "engine-gamma"],
+    "engine-gamma": ["engine-alpha", "engine-beta"]
+  },
+  "routes": {
+    "高风险复审": {
+      "description": "涉及权限或数据变更时使用。先按全部作者的 reviewers 交集过滤候选，仅运行失败才替补；质量不过修复后再审，无合规候选则暂停并报告使用者。",
+      "candidates": [
+        {"engine": "engine-beta", "model": "beta-review"},
+        {"engine": "engine-gamma", "model": "gamma-review"}
+      ]
+    },
+    "写代码": {
+      "description": "代码、配置及需要复审的文档。运行失败时依次替补，每个候选最多一次；失败引擎仍计入作者集合。质量不过先修复并再审，无法修复时报告使用者。",
+      "candidates": [
+        {"engine": "engine-alpha", "model": "alpha-code"},
+        {"engine": "engine-gamma", "model": "gamma-code"}
+      ]
+    },
+    "调研": {
+      "description": "检索、对比、评测和长文档撰写。仅运行失败时按序替补，结果不满足要求时补充证据并修订；候选耗尽或评测范围未明确时报告使用者。",
+      "candidates": [
+        {"engine": "engine-gamma", "model": "gamma-research"},
+        {"engine": "engine-alpha", "model": "alpha-research"}
+      ]
+    }
+  }
+}

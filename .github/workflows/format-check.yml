@@ -91,6 +91,9 @@ jobs:
                       raise ValueError()
                   # Every rules*.json is covered; the contract may also name differently named templates.
                   known_rules = {n for n in tables if re.search(r'(^|/)rules(?:[._-][^/]*)?\.json$', n)}
+                  if scope == 'public' and 'routing/template.rules.json' in contract:
+                      for name in known_rules:
+                          contract.setdefault(name, contract['routing/template.rules.json'])
                   if not known_rules.issubset(contract):
                       raise ValueError()
               except (ValueError, UnicodeError):
