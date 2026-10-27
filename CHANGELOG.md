@@ -11,3 +11,9 @@
 - 提供 `tools/run-done-watcher/` 中运行完成通知、心跳检查与离线对账组件。
 - 收紧导出文件白名单，校验作者引擎及完整配置，排除运行状态并以路径摘要绑定 watcher 状态。
 - 补全模板契约与本机路径检查，明确示例词表豁免、合并授权及同步检查位置。
+
+## PR 看护指南
+
+新增 `docs/pr-watchdog.md`、`scripts/pr-watch/schema.json` 和 `examples/pr-watch/`，提供隔离修复、对账水位线与虚构事件示例。
+
+- 明确缺少仓库名时输出的 `repo` 为 null，并同步 schema。

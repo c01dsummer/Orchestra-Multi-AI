@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "status": "attention_required",
+  "runs": {
+    "in_flight": [
+      {
+        "run_id": "sample-001",
+        "reason": "进程仍在运行"
+      }
+    ],
+    "completed_unreported": [],
+    "orphaned": [],
+    "unknown": []
+  },
+  "prs": {
+    "items": [
+      {
+        "repo": "example-org/demo-project",
+        "number": 12,
+        "head_sha": "abc123",
+        "action": "dispatch_auto_fix",
+        "circuit_broken": false,
+        "comments": [
+          {
+            "event": "example-org/demo-project:PR#12:head=abc123:reviews:1",
+            "trusted": true,
+            "body": "请修复检查结果",
+            "action": "observe"
+          }
+        ],
+        "unhandled_events": [
+          "example-org/demo-project:PR#12:head=abc123:reviews:1"
+        ],
+        "round": 1,
+        "idempotency_key": "example-org/demo-project#12:abc123:round-1",
+        "requires_watch": true
+      }
+    ],
+    "unhandled_events": [
+      "example-org/demo-project:PR#12:head=abc123:reviews:1"
+    ],
+    "active_open_prs_requiring_watch": [
+      "example-org/demo-project#12"
+    ]
+  },
+  "window_state": {
+    "is_window_idle": false,
+    "consecutive_idle_windows": 0,
+    "idle_window_threshold": 3,
+    "can_pause_routine": false
+  }
+}
