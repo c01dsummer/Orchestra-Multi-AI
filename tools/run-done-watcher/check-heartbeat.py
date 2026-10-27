@@ -23,12 +23,18 @@ def main(argv=None):
     try:
         heartbeat = json.loads(Path(args.heartbeat).read_text(encoding="utf-8"))
         updated = dt.datetime.fromisoformat(heartbeat["updated_at"])
-        if updated.tzinfo is None or heartbeat["timezone"] != "UTC+08:00":
+        if updated.tzinfo is None:
             raise ValueError()
         pending = heartbeat.get("pending", 0)
         oldest = heartbeat.get("oldest_pending_age_seconds", 0)
         if (type(pending) is not int or pending < 0
                 or type(oldest) not in (int, float) or not math.isfinite(oldest) or oldest < 0):
+            raise ValueError()
+        zone = heartbeat["timezone"]
+        if not isinstance(zone, str) or not zone:
+            raise ValueError()
+        if zone != "UTC+08:00":
+            result["detail"] = "心跳时区与检查器预期不一致，请检查版本"
             raise ValueError()
         age = (checked - updated).total_seconds()
         result["age_seconds"] = round(age, 1)

@@ -396,6 +396,11 @@ class WatcherTest(unittest.TestCase):
                        {"stopping": True}, {"health": "需检查"}):
             path.write_text(json.dumps({**heartbeat, **change}), encoding="utf-8")
             self.assertFalse(self.check_heartbeat(1)["ok"])
+        path.write_text(json.dumps({**heartbeat, "timezone": "legacy"}), encoding="utf-8")
+        mismatch = self.check_heartbeat(1)
+        self.assertFalse(mismatch["ok"])
+        self.assertEqual(mismatch["reason"], "心跳缺失、不可读或格式无效")
+        self.assertIn("时区", mismatch["detail"])
         path.write_text("invalid", encoding="utf-8")
         self.check_heartbeat(1)
 
@@ -422,6 +427,12 @@ class WatcherTest(unittest.TestCase):
             self.assertEqual(result.stderr.strip(), "对账失败：文件、配置或时间范围无效；未输出原文。")
             return None
         return json.loads(result.stdout)
+
+    def test_reconcile_requires_complete_window(self):
+        self.append(event("window-test"))
+        self.run_once("--dry-run")
+        report = self.reconcile(1, "--production")
+        self.assertIn("必须指定两个完整 UTC+08:00 自然日的窗口", report["gate_errors"])
 
     def test_23_reconcile_twelve_events_all_routes(self):
         agents = ["示例助手甲", "示例助手甲旧名", "示例助手乙", "示例助手丙"]

@@ -138,7 +138,9 @@
                 ],
                 "properties": {
                   "repo": {
-                    "type": ["string", "null"]
+                    "type": ["string", "null"],
+                    "minLength": 1,
+                    "pattern": "^\\S+$"
                   },
                   "number": {
                     "type": "integer",

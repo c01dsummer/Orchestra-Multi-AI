@@ -25,7 +25,7 @@ python3 tools/run-done-watcher/run-done-watcher \
 
 真实通知另用独立状态目录，配置只保存环境变量名，秘密值通过环境注入。先核对接入边界，再显式选末尾接入或历史扫描；不要将 dry-run 状态改作 HTTP 状态。心跳由 `check-heartbeat.py` 独立检查，对账由 `reconcile.py` 配合策略文件执行。完成通知只表示运行结束。
 
-心跳的 `timezone` 字段值改为 `UTC+08:00`。新旧版本的 watcher 和检查器混用时，心跳会被判为格式无效，造成误报，不会误放行。升级时同时更新 watcher 和检查器，重启 watcher，确认心跳已重写后再恢复巡检；依赖该字段的外部消费方也须同步更新。
+心跳的 `timezone` 字段值改为 `UTC+08:00`。新旧版本的 watcher 和检查器混用时，心跳会被判为格式无效，造成误报，不会误放行。升级步骤：先暂停心跳检查定时任务；同时更新 watcher 与 `check-heartbeat.py`，沿用原状态目录按日常方式（不带首次接入参数）重启 watcher；运行一次 `python3 tools/run-done-watcher/check-heartbeat.py --heartbeat <状态目录>/heartbeat.json`，确认输出 `"ok": true`、心跳已重写为 `UTC+08:00`；再恢复心跳检查定时任务。依赖该字段的外部消费方也须同步更新。
 
 状态绑定仅保存规范化账本路径与 file 输出目录路径的 SHA-256 摘要，仍会拒绝更换账本、模式或配置。绑定格式升级为 schema 3；旧版状态目录会被拒绝复用，升级时须使用独立状态目录并重新核对接入边界。
 
