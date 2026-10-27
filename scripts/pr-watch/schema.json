@@ -1,0 +1,223 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.org/schemas/pr-watch.json",
+  "title": "巡检对账输出与水位线",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/output"
+    },
+    {
+      "$ref": "#/$defs/state"
+    }
+  ],
+  "$defs": {
+    "run": {
+      "type": "object",
+      "required": [
+        "run_id",
+        "reason"
+      ],
+      "properties": {
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "runs": {
+      "type": "object",
+      "required": [
+        "in_flight",
+        "completed_unreported",
+        "orphaned",
+        "unknown"
+      ],
+      "properties": {
+        "in_flight": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/run"
+          }
+        },
+        "completed_unreported": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/run"
+          }
+        },
+        "orphaned": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/run"
+          }
+        },
+        "unknown": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/run"
+          }
+        }
+      }
+    },
+    "window": {
+      "type": "object",
+      "required": [
+        "is_window_idle",
+        "consecutive_idle_windows",
+        "idle_window_threshold",
+        "can_pause_routine"
+      ],
+      "properties": {
+        "is_window_idle": {
+          "type": "boolean"
+        },
+        "consecutive_idle_windows": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "idle_window_threshold": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "can_pause_routine": {
+          "type": "boolean"
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "status",
+        "runs",
+        "prs",
+        "window_state"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "status": {
+          "enum": [
+            "ok",
+            "degraded_unknown",
+            "attention_required"
+          ]
+        },
+        "runs": {
+          "$ref": "#/$defs/runs"
+        },
+        "prs": {
+          "type": "object",
+          "required": [
+            "items",
+            "unhandled_events",
+            "active_open_prs_requiring_watch"
+          ],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "number",
+                  "head_sha",
+                  "action",
+                  "circuit_broken"
+                ],
+                "properties": {
+                  "repo": {
+                    "type": "string"
+                  },
+                  "number": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "head_sha": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "action": {
+                    "enum": [
+                      "observe",
+                      "dispatch_auto_fix",
+                      "idempotent_skip",
+                      "circuit_breaker_escalate",
+                      "blocked_unknown"
+                    ]
+                  },
+                  "circuit_broken": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "unhandled_events": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "active_open_prs_requiring_watch": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "window_state": {
+          "$ref": "#/$defs/window"
+        }
+      }
+    },
+    "state": {
+      "type": "object",
+      "required": [
+        "consecutive_idle_windows",
+        "prs",
+        "reported_pr_events"
+      ],
+      "properties": {
+        "consecutive_idle_windows": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reported_pr_events": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "prs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "round_count",
+              "heads"
+            ],
+            "properties": {
+              "round_count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "heads": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

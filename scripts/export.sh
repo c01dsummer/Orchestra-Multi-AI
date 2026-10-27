@@ -18,7 +18,9 @@ import tarfile
 root = Path(sys.argv[1]).resolve()
 output = Path(sys.argv[2])
 # Every exported file is explicitly approved; never recurse through local directories.
-public = ("README.md", "SKILL.md", "CHANGELOG.md", "LICENSE", ".gitignore",
+public = ("docs/pr-watchdog.md", "scripts/pr-watch/schema.json",
+          "examples/pr-watch/sample-events.jsonl", "examples/pr-watch/sample-reconcile-output.json",
+          "README.md", "SKILL.md", "CHANGELOG.md", "LICENSE", ".gitignore",
           ".github/workflows/format-check.yml",
           "roles/README.md", "roles/调度.md", "roles/开发.md", "roles/复审.md", "roles/调研.md",
           "roles/平台对接.md", "roles/审批.md", "roles/用量.md", "roles/配置管理.md",

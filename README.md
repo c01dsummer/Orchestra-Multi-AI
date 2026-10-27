@@ -127,3 +127,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tools/run-done-watcher
 ## 许可证
 
 采用 [MIT License](LICENSE)，版权归 Orchestra-Multi-AI Contributors。
+
+## PR 看护指南
+
+新增 `docs/pr-watchdog.md`、`scripts/pr-watch/schema.json` 和 `examples/pr-watch/`，提供隔离修复、对账水位线与虚构事件示例。

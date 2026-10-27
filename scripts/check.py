@@ -64,14 +64,16 @@ def core_files():
              "examples/team.json", "examples/rules.json", "examples/projects.md",
              "examples/CHANGELOG.md", "examples/private-words.txt",
              "examples/profiles/代码员.md", "examples/profiles/把关员.md",
-             "scripts/check.sh", "scripts/check.py", "scripts/export.sh"]
+             "scripts/check.sh", "scripts/check.py", "scripts/export.sh",
+             "docs/pr-watchdog.md", "scripts/pr-watch/schema.json",
+             "examples/pr-watch/sample-events.jsonl", "examples/pr-watch/sample-reconcile-output.json"]
     files += ["roles/" + role + ".md" for role in ROLES]
     files += ["process/" + process + ".md" for process in PROCESSES]
     files += ["tools/run-done-watcher/" + name for name in (
         "README.md", ".gitignore", "run-done-watcher", "check-heartbeat.py", "reconcile.py",
         "config.example.json", "reconcile.config.example.json", "watcher.py", "selftest.py", "test_selftest.py")]
     directories = ("roles", "routing", "process", "examples", "examples/profiles",
-                   "scripts", "tools/run-done-watcher")
+                   "scripts", "tools/run-done-watcher", "docs", "scripts/pr-watch", "examples/pr-watch")
     require(all((ROOT / path).is_file() for path in files)
             and all((ROOT / path).is_dir() for path in directories), "核心目录或文件缺失。")
     for name in ("check.sh", "export.sh"):
@@ -218,7 +220,8 @@ def files_under(directory):
                          and not name.startswith(("state-", "state_"))
                          and not (Path(current) == ROOT and name == "config"))
         for name in sorted(files):
-            if name == ".git" or name.endswith(SKIP_SUFFIXES):
+            if name == ".git" or (name.endswith(SKIP_SUFFIXES) and not
+                                  (Path(current) == ROOT / "examples/pr-watch" and name.endswith(".jsonl"))):
                 continue
             path = Path(current) / name
             yield path, path.read_bytes()
@@ -287,6 +290,10 @@ def main():
         print("提示：尚未创建 config/，本次校验示例；实际接活前请复制并修改配置。")
         print("通过：虚构团队、规则表示例及空白模板的严格 JSON 校验。")
     skill()
+    load_json(ROOT / "scripts/pr-watch/schema.json")
+    load_json(ROOT / "examples/pr-watch/sample-reconcile-output.json")
+    for line in (ROOT / "examples/pr-watch/sample-events.jsonl").read_text(encoding="utf-8").splitlines():
+        require(isinstance(json.loads(line), dict), "巡检事件示例无效。")
     privacy()
     print("自检全部通过：结构、JSON、技能入口及隐私检查完成。")
 
