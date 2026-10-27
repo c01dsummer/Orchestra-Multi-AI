@@ -23,3 +23,9 @@
 ## PR 快照状态契约
 
 `state` 支持 `OPEN`、`CLOSED`、`MERGED`，缺失时按 `OPEN` 处理；非字符串、带首尾空白或词表外值均为 unknown 并继续看护。`checks_state` 支持空、`UNKNOWN`、`SUCCESS`、`FAILURE`、`FAILED`、`ERROR`、`EXPECTED`、`PENDING`、`QUEUED`、`IN_PROGRESS`、`TIMED_OUT`、`CANCELLED`、`ACTION_REQUIRED`、`STARTUP_FAILURE`、`STALE`、`NEUTRAL`、`SKIPPED`；`review_decision` 支持空、`UNKNOWN`、`APPROVED`、`CHANGES_REQUESTED`、`REQUEST_CHANGES`、`REVIEW_REQUIRED`；`mergeable` 支持空、`UNKNOWN`、`MERGEABLE`、`CONFLICTING`、`CONFLICT`。状态值不区分大小写，其余字段缺失按空值处理，检查或合并状态为空、任一字段为 `UNKNOWN` 及词表外值均为 unknown。只有检查 `SUCCESS`、复审 `APPROVED` 或空、合并状态 `MERGEABLE` 才算稳定，未处理事件仍需看护。
+
+`reviews` 条目的 `head_sha` 表示评审针对的提交。可信账号的变更请求评审只有与 PR 当前 `head_sha` 完全一致，且 `review_decision` 为变更请求时才能触发修复候选；旧提交评审仍输出为事件。当 `review_decision` 为变更请求，可信变更请求评审的 `head_sha` 缺失、非字符串或为空白时，按 unknown 处理，保留事件和看护并阻止派发。
+
+## 输出契约
+
+`scripts/pr-watch/schema.json` 描述对账输出和持久状态。对象允许增加字段，以支持生产者扩展；已声明字段仍需符合其类型及约束。自检目前检查示例的严格 JSON 语法，完整 schema 校验尚待后续实现。

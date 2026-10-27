@@ -37,7 +37,7 @@ def engine(value):
     return nonempty(value) and not any(char.isspace() for char in value)
 
 
-def load_json(path):
+def parse_json(text):
     def pairs(items):
         result = {}
         for key, value in items:
@@ -50,10 +50,16 @@ def load_json(path):
         raise ValueError()
 
     try:
+        return json.loads(text, object_pairs_hook=pairs, parse_constant=constant)
+    except (ValueError, RecursionError):
+        fail("JSON 读取失败；请检查编码、重复键、特殊数值和语法。")
+
+
+def load_json(path):
+    try:
         # utf-8 intentionally rejects a BOM instead of silently stripping it.
-        return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=pairs,
-                          parse_constant=constant)
-    except (OSError, UnicodeError, ValueError, RecursionError):
+        return parse_json(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError):
         fail("JSON 读取失败；请检查编码、重复键、特殊数值和语法。")
 
 
@@ -293,7 +299,7 @@ def main():
     load_json(ROOT / "scripts/pr-watch/schema.json")
     load_json(ROOT / "examples/pr-watch/sample-reconcile-output.json")
     for line in (ROOT / "examples/pr-watch/sample-events.jsonl").read_text(encoding="utf-8").splitlines():
-        require(isinstance(json.loads(line), dict), "巡检事件示例无效。")
+        require(bool(line.strip()) and isinstance(parse_json(line), dict), "巡检事件示例无效。")
     privacy()
     print("自检全部通过：结构、JSON、技能入口及隐私检查完成。")
 

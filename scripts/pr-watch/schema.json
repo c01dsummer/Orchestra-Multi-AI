@@ -142,6 +142,26 @@
                     "type": "string",
                     "minLength": 1
                   },
+                  "comments": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": ["event", "trusted", "body", "action"],
+                      "properties": {
+                        "event": {"type": "string"},
+                        "trusted": {"type": "boolean"},
+                        "body": {"type": "string"},
+                        "action": {"enum": ["observe", "ignore_untrusted"]}
+                      }
+                    }
+                  },
+                  "unhandled_events": {
+                    "type": "array",
+                    "items": {"type": "string"}
+                  },
+                  "requires_watch": {
+                    "type": "boolean"
+                  },
                   "action": {
                     "enum": [
                       "observe",
