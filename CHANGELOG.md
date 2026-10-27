@@ -23,6 +23,7 @@
 - 收紧输入完整性：统一仓库前缀形态，规范可信身份及事件标识，要求已提交事件时间戳非递减，并限制决定性评审的提交标识；`schema.json` 的 `repo` 收紧为 `null` 或匹配 `^[!-~]+$` 的非空可见 ASCII 字符串。
 - 持久状态 schema 校验 `prs` 键格式，拒绝在同一映射中混用有仓库前缀和无仓库前缀的键。
 - 对账顶层 `status` 新增 `unknown`，保留 `degraded_unknown` 向后兼容；完整性 `unknown` 时回滚水位线预留，保留 `circuit_breaker_escalate` 熔断告警。
+- 保留评审状态兼容别名及总体决议触发条件，按仓库、PR 和事件类型去重，并兼容省略 `reasons` 的历史版本 1 输出。
 
 ### 完成通知组件
 
@@ -30,3 +31,4 @@
 - 对账门槛错误文案改用 `UTC+08:00` 自然日表述，影响对账报告中的 `gate_errors`。
 - 心跳 `timezone` 标识不一致时，`check-heartbeat.py` 输出结构化 `reason: "invalid_heartbeat_payload"` 和 `detail` 升级提示。
 - 补充心跳版本混用与对账窗口自检测试。
+- 澄清首次接入中断后的重启参数及末尾接入 pending 的续跑方式。

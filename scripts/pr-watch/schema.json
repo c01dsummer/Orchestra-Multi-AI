@@ -135,7 +135,6 @@
                   "unhandled_events",
                   "requires_watch",
                   "action",
-                  "reasons",
                   "round",
                   "idempotency_key",
                   "circuit_broken"
