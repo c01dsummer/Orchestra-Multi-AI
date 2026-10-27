@@ -8,7 +8,7 @@ import math
 from pathlib import Path
 import sys
 
-TZ = dt.timezone(dt.timedelta(hours=8), name="Asia/Shanghai")
+TZ = dt.timezone(dt.timedelta(hours=8), name="UTC+08:00")
 
 
 def main(argv=None):
@@ -23,7 +23,7 @@ def main(argv=None):
     try:
         heartbeat = json.loads(Path(args.heartbeat).read_text(encoding="utf-8"))
         updated = dt.datetime.fromisoformat(heartbeat["updated_at"])
-        if updated.tzinfo is None or heartbeat["timezone"] != "Asia/Shanghai":
+        if updated.tzinfo is None or heartbeat["timezone"] != "UTC+08:00":
             raise ValueError()
         pending = heartbeat.get("pending", 0)
         oldest = heartbeat.get("oldest_pending_age_seconds", 0)

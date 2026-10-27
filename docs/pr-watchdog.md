@@ -14,7 +14,7 @@
 
 ## 幂等与熔断
 
-对每个 PR、提交和轮次记录 `<repo>#<pr_number>:<head_sha>:round-<n>`；同一个提交只触发一次，重扫不得重复派发。自动修复最多按每个 PR 累计 2 轮，计数不清零；达到上限后仍失败，或发生冲突，停止派发并升级人工审核，禁止无限自激循环。并发执行前持有独立锁，状态持久化并记录实际动作；候选不等于已执行。不要以状态文件替代锁。缺少仓库名时，输出的 `repo` 为 null，键为 `<pr_number>:<head_sha>:round-<n>`。任何 unknown 均阻止派发并撤销本次预留；干跑以 `dry_run_preview` 表示不可派发的候选，round 和幂等键为 null，且不写状态。
+对每个 PR、提交和轮次记录 `<repo>#<pr_number>:<head_sha>:round-<n>`；同一个提交只触发一次，重扫不得重复派发。自动修复最多按每个 PR 累计 2 轮，计数不清零；达到上限后仍失败，或发生冲突，停止派发并升级人工审核，禁止无限自激循环。并发执行前持有独立锁，状态持久化并记录实际动作；候选不等于已执行。不要以状态文件替代锁。缺少仓库名时，输出的 `repo` 为 `null`，幂等键回退为 `<pr_number>:<head_sha>:round-<n>`，事件标识、看护列表条目及状态文件中 `prs` 的键均使用不带仓库前缀的编号格式。例如编号为 12、提交为 `abc123`、轮次为 1 时，幂等键为 `12:abc123:round-1`，看护列表及状态键为 `12`，事件可为 `PR#12:head=abc123:reviews:1`。回退键仅适用于单仓巡检；同一巡检实例不得混用有 `repo` 与无 `repo` 的输入，否则幂等键与轮次计数会分叉。任何 unknown 均阻止派发并撤销本次预留；干跑以 `dry_run_preview` 表示不可派发的候选，round 和幂等键为 null，且不写状态。
 
 ## 委托治理边界
 
@@ -24,7 +24,15 @@
 
 `state` 支持 `OPEN`、`CLOSED`、`MERGED`，缺失时按 `OPEN` 处理；非字符串、非 ASCII、带首尾空白或词表外值均为 unknown 并继续看护。`checks_state` 支持空、`UNKNOWN`、`SUCCESS`、`FAILURE`、`FAILED`、`ERROR`、`EXPECTED`、`PENDING`、`QUEUED`、`IN_PROGRESS`、`TIMED_OUT`、`CANCELLED`、`ACTION_REQUIRED`、`STARTUP_FAILURE`、`STALE`、`NEUTRAL`、`SKIPPED`；`review_decision` 支持空、`UNKNOWN`、`APPROVED`、`CHANGES_REQUESTED`、`REQUEST_CHANGES`、`REVIEW_REQUIRED`；`mergeable` 支持空、`UNKNOWN`、`MERGEABLE`、`CONFLICTING`、`CONFLICT`。状态值使用 ASCII 字符，不区分大小写，其余字段缺失按空值处理；非字符串、非 ASCII、检查或合并状态为空、任一字段为 `UNKNOWN` 及词表外值均为 unknown。只有检查 `SUCCESS`、复审 `APPROVED` 或空、合并状态 `MERGEABLE` 才算稳定，未处理事件仍需看护。
 
-`reviews` 条目的 `head_sha` 表示评审针对的提交。按输入顺序、作者 login 的 `casefold` 结果分组；只有 `APPROVED`、`CHANGES_REQUESTED`、`REQUEST_CHANGES` 和 `DISMISSED` 更新该评审者的最新有效决议，`COMMENTED`、`PENDING` 仅保留为事件，不取代前序变更请求。采集方须按时间正序翻完所有分页，提供带 `head_sha`、`state` 和作者 login 的完整评审列表，不可逆序或截断。可信账号的最新有效变更请求与 PR 当前 `head_sha` 完全一致，且 `review_decision` 为变更请求时才能触发修复候选；旧提交和被取代的评审仍输出为事件。当总体决议为变更请求，且最新有效的可信变更请求的 `head_sha` 缺失、非字符串、非 ASCII、空白或带首尾空白，或任一可信评审的 `state` 缺失、非字符串、非 ASCII、空白、带首尾空白或不在上述枚举内，按 unknown 处理，保留事件和看护并阻止派发。
+`reviews` 条目的 `head_sha` 表示评审针对的提交。可信作者白名单比对与评审者分组均要求 `login` 为非空 ASCII 字符串，去除首尾空白后按 ASCII 小写匹配。评审 `state` 仅接受 ASCII，大小写不敏感：决定性状态为 `APPROVED`、`CHANGES_REQUESTED`、`REQUEST_CHANGES`、`DISMISSED`，事件状态为 `COMMENTED`、`PENDING`。按输入顺序分组，只有决定性状态更新该评审者的最新有效决议。可信账号的最新有效变更请求与 PR 当前 `head_sha` 完全一致，且 `review_decision` 为变更请求时才能触发修复候选。旧提交、被取代或非决定性的评审仍作为事件保留，但不能触发修复候选。
+
+采集方须按时间正序翻完所有分页，提供完整评审列表，不可逆序或截断；每条评审和评论须有非空标量 `id` 和字符串 `body`，评审还须有 `head_sha`、`state` 和作者 `login`。消费方若检测到分页未取完标志、时间戳不单调等数据不完整信号，也须整体判为 `unknown` 并阻止派发。
+
+当 `review_decision` 为 `CHANGES_REQUESTED` 或 `REQUEST_CHANGES` 时，以下任一条件都判为 `unknown`，保留事件和看护并阻止派发：
+
+1. 任一评审的作者 `login` 缺失、空白或含非 ASCII 字符，或不是字符串。
+2. 任一可信评审的 `state` 缺失、非字符串、非 ASCII、空白、带首尾空白或不在上述枚举内。
+3. 最新有效的可信变更请求的 `head_sha` 缺失、非字符串、非 ASCII、空白或带首尾空白。
 
 ## 输出契约
 

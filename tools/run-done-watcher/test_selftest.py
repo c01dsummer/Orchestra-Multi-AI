@@ -28,7 +28,7 @@ class PackageTest(unittest.TestCase):
         self.repo = self.temp / "orchestra"
         self.repo.mkdir()
         for name in ("README.md", "SKILL.md", "CHANGELOG.md", "LICENSE", ".gitignore",
-                     "roles", "process", "routing", "examples", "scripts", "tools", ".github"):
+                     "roles", "process", "routing", "examples", "scripts", "tools", "docs", ".github"):
             source, target = ROOT / name, self.repo / name
             if source.is_dir():
                 shutil.copytree(source, target, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
