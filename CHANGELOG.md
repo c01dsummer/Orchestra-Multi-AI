@@ -15,3 +15,5 @@
 ## PR 看护指南
 
 新增 `docs/pr-watchdog.md`、`scripts/pr-watch/schema.json` 和 `examples/pr-watch/`，提供隔离修复、对账水位线与虚构事件示例。
+
+- 明确缺少仓库名时输出的 `repo` 为 null，并同步 schema。

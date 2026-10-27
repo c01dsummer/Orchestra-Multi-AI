@@ -138,7 +138,7 @@
                 ],
                 "properties": {
                   "repo": {
-                    "type": "string"
+                    "type": ["string", "null"]
                   },
                   "number": {
                     "type": "integer",
