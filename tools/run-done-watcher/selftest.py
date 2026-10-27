@@ -134,7 +134,7 @@ class WatcherTest(unittest.TestCase):
                          {"event", "event_id", "run_id", "agent", "end_time", "exit_code"})
         self.assertEqual(self.rows(), [("new-1", "delivered", 1)])
         heartbeat = self.heartbeat()
-        self.assertEqual(heartbeat["timezone"], "Asia/Shanghai")
+        self.assertEqual(heartbeat["timezone"], "UTC+08:00")
         self.assertEqual(dt.datetime.fromisoformat(heartbeat["updated_at"]).utcoffset(),
                          dt.timedelta(hours=8))
 

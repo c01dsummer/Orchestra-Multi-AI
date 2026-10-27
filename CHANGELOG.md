@@ -17,3 +17,7 @@
 新增 `docs/pr-watchdog.md`、`scripts/pr-watch/schema.json` 和 `examples/pr-watch/`，提供隔离修复、对账水位线与虚构事件示例。
 
 - 明确缺少仓库名时输出的 `repo` 为 null，并同步 schema。
+- 收紧输出契约，六个事件及看护字段列为必填；明确决定性评审的取代顺序，非 ASCII 状态判为 `unknown`。
+- 澄清评审判定条件与作者 ASCII 规范，要求消费方对不完整分页或非单调时间戳按 `unknown` 处理。
+- 完成通知组件使用固定 UTC 偏移标识，心跳检查与示例测试同步更新。
+- 对 `blocked_unknown` 强制 `requires_watch: true`，并说明单仓缺少仓库名时的回退键及适用范围。

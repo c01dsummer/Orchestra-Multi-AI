@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 import sys
 
-TZ = dt.timezone(dt.timedelta(hours=8), name="Asia/Shanghai")
+TZ = dt.timezone(dt.timedelta(hours=8), name="UTC+08:00")
 RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}\Z")
 
 

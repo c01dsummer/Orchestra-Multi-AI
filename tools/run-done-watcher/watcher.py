@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""只读完成账本，将最小事件持久化后投递。所有时间使用 Asia/Shanghai。"""
+"""只读完成账本，将最小事件持久化后投递。所有时间使用 UTC+08:00。"""
 
 import argparse
 import datetime as dt
@@ -19,7 +19,7 @@ import urllib.parse
 import urllib.request
 
 
-TZ = dt.timezone(dt.timedelta(hours=8), name="Asia/Shanghai")
+TZ = dt.timezone(dt.timedelta(hours=8), name="UTC+08:00")
 MAX_LINE = 1024 * 1024
 RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}\Z")
 ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
@@ -414,7 +414,7 @@ class Watcher:
         invalid = int(self.get("invalid_lines") or 0)
         resets = int(self.get("ledger_resets") or 0)
         atomic_json(self.state / "heartbeat.json", {
-            "updated_at": now(), "timezone": "Asia/Shanghai", "pid": os.getpid(),
+            "updated_at": now(), "timezone": "UTC+08:00", "pid": os.getpid(),
             "mode": self.mode(), "ledger_readable": self.ledger_ok,
             "health": "正常" if self.ledger_ok and not (failed or any(self.unreviewed().values())) else "需检查",
             "pending": pending, "failed_pending": failed,

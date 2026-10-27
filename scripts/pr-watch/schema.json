@@ -228,6 +228,21 @@
                     "if": {
                       "properties": {
                         "action": {
+                          "const": "blocked_unknown"
+                        }
+                      },
+                      "required": ["action"]
+                    },
+                    "then": {
+                      "properties": {
+                        "requires_watch": {"const": true}
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "action": {
                           "enum": [
                             "blocked_unknown",
                             "dry_run_preview"
