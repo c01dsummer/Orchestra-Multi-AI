@@ -125,9 +125,15 @@
               "items": {
                 "type": "object",
                 "required": [
+                  "repo",
                   "number",
                   "head_sha",
+                  "comments",
+                  "unhandled_events",
+                  "requires_watch",
                   "action",
+                  "round",
+                  "idempotency_key",
                   "circuit_broken"
                 ],
                 "properties": {

@@ -22,9 +22,9 @@
 
 ## PR 快照状态契约
 
-`state` 支持 `OPEN`、`CLOSED`、`MERGED`，缺失时按 `OPEN` 处理；非字符串、带首尾空白或词表外值均为 unknown 并继续看护。`checks_state` 支持空、`UNKNOWN`、`SUCCESS`、`FAILURE`、`FAILED`、`ERROR`、`EXPECTED`、`PENDING`、`QUEUED`、`IN_PROGRESS`、`TIMED_OUT`、`CANCELLED`、`ACTION_REQUIRED`、`STARTUP_FAILURE`、`STALE`、`NEUTRAL`、`SKIPPED`；`review_decision` 支持空、`UNKNOWN`、`APPROVED`、`CHANGES_REQUESTED`、`REQUEST_CHANGES`、`REVIEW_REQUIRED`；`mergeable` 支持空、`UNKNOWN`、`MERGEABLE`、`CONFLICTING`、`CONFLICT`。状态值不区分大小写，其余字段缺失按空值处理，检查或合并状态为空、任一字段为 `UNKNOWN` 及词表外值均为 unknown。只有检查 `SUCCESS`、复审 `APPROVED` 或空、合并状态 `MERGEABLE` 才算稳定，未处理事件仍需看护。
+`state` 支持 `OPEN`、`CLOSED`、`MERGED`，缺失时按 `OPEN` 处理；非字符串、非 ASCII、带首尾空白或词表外值均为 unknown 并继续看护。`checks_state` 支持空、`UNKNOWN`、`SUCCESS`、`FAILURE`、`FAILED`、`ERROR`、`EXPECTED`、`PENDING`、`QUEUED`、`IN_PROGRESS`、`TIMED_OUT`、`CANCELLED`、`ACTION_REQUIRED`、`STARTUP_FAILURE`、`STALE`、`NEUTRAL`、`SKIPPED`；`review_decision` 支持空、`UNKNOWN`、`APPROVED`、`CHANGES_REQUESTED`、`REQUEST_CHANGES`、`REVIEW_REQUIRED`；`mergeable` 支持空、`UNKNOWN`、`MERGEABLE`、`CONFLICTING`、`CONFLICT`。状态值使用 ASCII 字符，不区分大小写，其余字段缺失按空值处理；非字符串、非 ASCII、检查或合并状态为空、任一字段为 `UNKNOWN` 及词表外值均为 unknown。只有检查 `SUCCESS`、复审 `APPROVED` 或空、合并状态 `MERGEABLE` 才算稳定，未处理事件仍需看护。
 
-`reviews` 条目的 `head_sha` 表示评审针对的提交。可信账号的变更请求评审只有当前仍有效、未被同一评审者之后的评审取代，与 PR 当前 `head_sha` 完全一致，且 `review_decision` 为变更请求时才能触发修复候选；旧提交评审和被取代的评审仍输出为事件，但不能触发修复候选。当 `review_decision` 为变更请求，可信变更请求评审的 `head_sha` 缺失、非字符串或为空白时，按 unknown 处理，保留事件和看护并阻止派发。
+`reviews` 条目的 `head_sha` 表示评审针对的提交。按输入顺序、作者 login 的 `casefold` 结果分组；只有 `APPROVED`、`CHANGES_REQUESTED`、`REQUEST_CHANGES` 和 `DISMISSED` 更新该评审者的最新有效决议，`COMMENTED`、`PENDING` 仅保留为事件，不取代前序变更请求。采集方须按时间正序翻完所有分页，提供带 `head_sha`、`state` 和作者 login 的完整评审列表，不可逆序或截断。可信账号的最新有效变更请求与 PR 当前 `head_sha` 完全一致，且 `review_decision` 为变更请求时才能触发修复候选；旧提交和被取代的评审仍输出为事件。当总体决议为变更请求，且最新有效的可信变更请求的 `head_sha` 缺失、非字符串、非 ASCII、空白或带首尾空白，或任一可信评审的 `state` 缺失、非字符串、非 ASCII、空白、带首尾空白或不在上述枚举内，按 unknown 处理，保留事件和看护并阻止派发。
 
 ## 输出契约
 
