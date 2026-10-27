@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""由独立 routine 执行的一次性心跳检查；不联网、不发送通知。"""
+"""由独立的心跳检查定时任务执行的一次性心跳检查；不联网、不发送通知。"""
 
 import argparse
 import datetime as dt
@@ -34,7 +34,8 @@ def main(argv=None):
         if not isinstance(zone, str) or not zone:
             raise ValueError()
         if zone != "UTC+08:00":
-            result["detail"] = "心跳时区与检查器预期不一致，请检查版本"
+            result["detail"] = "版本不一致，请同时升级并重启 watcher"
+            result["reason"] = "invalid_heartbeat_payload"
             raise ValueError()
         age = (checked - updated).total_seconds()
         result["age_seconds"] = round(age, 1)
@@ -53,7 +54,7 @@ def main(argv=None):
             result["ok"] = True
         result["reason"] = reason
     except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
-        result["reason"] = "心跳缺失、不可读或格式无效"
+        result.setdefault("reason", "心跳缺失、不可读或格式无效")
     print(json.dumps(result, ensure_ascii=False))
     return 0 if result["ok"] else 1
 

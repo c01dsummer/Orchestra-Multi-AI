@@ -399,8 +399,8 @@ class WatcherTest(unittest.TestCase):
         path.write_text(json.dumps({**heartbeat, "timezone": "legacy"}), encoding="utf-8")
         mismatch = self.check_heartbeat(1)
         self.assertFalse(mismatch["ok"])
-        self.assertEqual(mismatch["reason"], "心跳缺失、不可读或格式无效")
-        self.assertIn("时区", mismatch["detail"])
+        self.assertEqual(mismatch["reason"], "invalid_heartbeat_payload")
+        self.assertEqual(mismatch["detail"], "版本不一致，请同时升级并重启 watcher")
         path.write_text("invalid", encoding="utf-8")
         self.check_heartbeat(1)
 
@@ -427,12 +427,6 @@ class WatcherTest(unittest.TestCase):
             self.assertEqual(result.stderr.strip(), "对账失败：文件、配置或时间范围无效；未输出原文。")
             return None
         return json.loads(result.stdout)
-
-    def test_reconcile_requires_complete_window(self):
-        self.append(event("window-test"))
-        self.run_once("--dry-run")
-        report = self.reconcile(1, "--production")
-        self.assertIn("必须指定两个完整 UTC+08:00 自然日的窗口", report["gate_errors"])
 
     def test_23_reconcile_twelve_events_all_routes(self):
         agents = ["示例助手甲", "示例助手甲旧名", "示例助手乙", "示例助手丙"]
@@ -576,7 +570,8 @@ class WatcherTest(unittest.TestCase):
         self.assertFalse(self.reconcile(1, *args, "--min-events", "1")["acceptance"])
         self.reconcile(1, *args, "--until", "2026-10-21T00:00:00+08:00")
         self.reconcile(1, *args, "--until", "2026-10-22T01:00:00+08:00")
-        self.reconcile(1, "--production")
+        report = self.reconcile(1, "--production")
+        self.assertIn("必须指定两个完整 UTC+08:00 自然日的窗口", report["gate_errors"])
         path = self.state / "events.jsonl"
         original = path.read_text()
         for field, value in (("exit_code", 9), ("end_time", "2020-01-01T00:00:00+08:00")):
@@ -837,7 +832,6 @@ class WatcherTest(unittest.TestCase):
         report = self.reconcile(1, *args, "--since", "2026-10-19T00:00:00+08:00", "--until", "2026-10-21T00:00:00+08:00")
         self.assertEqual(report["gate_errors"], ["窗口必须为检查当天之前最近两个完整 UTC+08:00 自然日"])
         self.assertFalse(report["acceptance"])
-        self.assertIn("窗口必须为检查当天之前最近两个完整 UTC+08:00 自然日", report["gate_errors"])
 
     def test_56_helper_has_no_implicit_history(self):
         self.assertNotIn("--allow-history", self.args())
@@ -920,5 +914,5 @@ class WatcherTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    # 避免测试 import 在工作目录产生缓存文件。
+    # 直接运行时显示各测试的详细结果。
     unittest.main(verbosity=2)

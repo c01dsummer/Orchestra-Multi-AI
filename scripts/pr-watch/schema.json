@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.org/schemas/pr-watch.json",
   "title": "巡检对账输出与水位线",
+  "description": "严格校验 schema_version: 1 的输出契约及持久状态。输出条目的 repo 为 null（单仓无 repo，或缺失、非法的输入被拒收降级）或匹配 ^[!-~]+$ 的非空可见 ASCII 字符串，不得含换行。",
   "oneOf": [
     {
       "$ref": "#/$defs/output"
@@ -106,6 +107,7 @@
           "enum": [
             "ok",
             "degraded_unknown",
+            "unknown",
             "attention_required"
           ]
         },
@@ -139,8 +141,8 @@
                 "properties": {
                   "repo": {
                     "type": ["string", "null"],
-                    "minLength": 1,
-                    "pattern": "^\\S+$"
+                    "pattern": "^[!-~]+$",
+                    "not": {"type": "string", "pattern": "[\r\n]"}
                   },
                   "number": {
                     "type": "integer",
