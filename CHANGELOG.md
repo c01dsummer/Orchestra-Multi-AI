@@ -21,9 +21,12 @@
 - 澄清评审判定条件与作者 ASCII 规范，要求消费方对不完整分页或非单调时间戳按 `unknown` 处理。
 - 对 `blocked_unknown` 强制 `requires_watch: true`，并说明单仓缺少仓库名时的回退键及适用范围。
 - 收紧输入完整性：统一仓库前缀形态，规范可信身份及事件标识，要求已提交事件时间戳非递减，并限制决定性评审的提交标识；`schema.json` 的 `repo` 收紧为 `null` 或匹配 `^[!-~]+$` 的非空可见 ASCII 字符串。
+- 持久状态 schema 校验 `prs` 键格式，拒绝在同一映射中混用有仓库前缀和无仓库前缀的键。
+- 对账顶层 `status` 新增 `unknown`，保留 `degraded_unknown` 向后兼容；完整性 `unknown` 时回滚水位线预留，保留 `circuit_breaker_escalate` 熔断告警。
 
 ### 完成通知组件
 
 - 不兼容变更：完成通知组件的心跳 `timezone` 字段值改为 `UTC+08:00`，新旧 watcher 与检查器混用会误报而不会误放行；外部消费方须同步更新。暂停和恢复心跳检查定时任务的升级步骤见 `tools/run-done-watcher/README.md`。
 - 对账门槛错误文案改用 `UTC+08:00` 自然日表述，影响对账报告中的 `gate_errors`。
+- 心跳 `timezone` 标识不一致时，`check-heartbeat.py` 输出结构化 `reason: "invalid_heartbeat_payload"` 和 `detail` 升级提示。
 - 补充心跳版本混用与对账窗口自检测试。
