@@ -89,11 +89,11 @@ def main(argv=None):
             if args.min_events < 10 or args.min_per_agent < 1:
                 gates.append("生产事件门槛不得降低")
             if not since or not until:
-                gates.append("必须指定两个完整北京时间日的窗口")
+                gates.append("必须指定两个完整 UTC+08:00 自然日的窗口")
             elif (since.astimezone(TZ).time() != dt.time() or until.astimezone(TZ).time() != dt.time()
                   or until - since != dt.timedelta(days=2)
                   or until.astimezone(TZ) != checked.replace(hour=0, minute=0, second=0, microsecond=0)):
-                gates.append("窗口必须为检查当天之前最近两个完整北京时间日")
+                gates.append("窗口必须为检查当天之前最近两个完整 UTC+08:00 自然日")
             if not required <= set(canonical.values()) or not valid_aliases:
                 gates.append("配置须覆盖必需助手及同路由别名")
         ledger_content, watcher_content = {}, {}

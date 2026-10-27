@@ -824,9 +824,9 @@ class WatcherTest(unittest.TestCase):
                 text = text.replace("2026-10-%02d" % day, "2026-10-%02d" % (day - 1))
             path.write_text(text)
         report = self.reconcile(1, *args, "--since", "2026-10-19T00:00:00+08:00", "--until", "2026-10-21T00:00:00+08:00")
-        self.assertEqual(report["gate_errors"], ["窗口必须为检查当天之前最近两个完整北京时间日"])
+        self.assertEqual(report["gate_errors"], ["窗口必须为检查当天之前最近两个完整 UTC+08:00 自然日"])
         self.assertFalse(report["acceptance"])
-        self.assertIn("窗口必须为检查当天之前最近两个完整北京时间日", report["gate_errors"])
+        self.assertIn("窗口必须为检查当天之前最近两个完整 UTC+08:00 自然日", report["gate_errors"])
 
     def test_56_helper_has_no_implicit_history(self):
         self.assertNotIn("--allow-history", self.args())
