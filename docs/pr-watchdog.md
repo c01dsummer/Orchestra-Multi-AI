@@ -14,10 +14,12 @@
 
 ## 幂等与熔断
 
-对每个 PR、提交和轮次记录 `<repo>#<pr_number>:<head_sha>:round-<n>`；同一个提交只触发一次，重扫不得重复派发。单 PR 连续自动修复最多 2 轮；两轮后仍失败，或发生冲突，停止派发并升级人工审核，禁止无限自激循环。并发执行前持有独立锁，状态持久化并记录实际动作；候选不等于已执行。不要以状态文件替代锁。缺少仓库名时键为 `<pr_number>:<head_sha>:round-<n>`。任何 unknown 均阻止派发并撤销本次预留；干跑以 `dry_run_preview` 表示不可派发的候选，round 和幂等键为 null，且不写状态。
+对每个 PR、提交和轮次记录 `<repo>#<pr_number>:<head_sha>:round-<n>`；同一个提交只触发一次，重扫不得重复派发。自动修复最多按每个 PR 累计 2 轮，计数不清零；达到上限后仍失败，或发生冲突，停止派发并升级人工审核，禁止无限自激循环。并发执行前持有独立锁，状态持久化并记录实际动作；候选不等于已执行。不要以状态文件替代锁。缺少仓库名时键为 `<pr_number>:<head_sha>:round-<n>`。任何 unknown 均阻止派发并撤销本次预留；干跑以 `dry_run_preview` 表示不可派发的候选，round 和幂等键为 null，且不写状态。
 
 ## 委托治理边界
 
 自动巡检只负责对账、提醒与受控派发；不替代跨家复审，也不自行批准或合并。维护者决定处理、恢复和最终合流，权限应按读取与写入分离。
 
-PR 快照中的检查状态支持空、`UNKNOWN`、`SUCCESS`、`FAILURE`、`FAILED`、`ERROR`、`EXPECTED`、`PENDING`、`QUEUED`、`IN_PROGRESS`、`TIMED_OUT`、`CANCELLED`、`ACTION_REQUIRED`、`STARTUP_FAILURE`、`STALE`、`NEUTRAL`、`SKIPPED`；复审决定支持空、`UNKNOWN`、`APPROVED`、`CHANGES_REQUESTED`、`REQUEST_CHANGES`、`REVIEW_REQUIRED`；合并状态支持空、`UNKNOWN`、`MERGEABLE`、`CONFLICTING`、`CONFLICT`。状态值不区分大小写，缺失按空值处理，检查或合并状态为空、任一字段为 `UNKNOWN` 及词表外值均为 unknown。只有检查 `SUCCESS`、复审 `APPROVED` 或空、合并状态 `MERGEABLE` 才算稳定，未处理事件仍需看护。
+## PR 快照状态契约
+
+`state` 支持 `OPEN`、`CLOSED`、`MERGED`，缺失时按 `OPEN` 处理；非字符串、带首尾空白或词表外值均为 unknown 并继续看护。`checks_state` 支持空、`UNKNOWN`、`SUCCESS`、`FAILURE`、`FAILED`、`ERROR`、`EXPECTED`、`PENDING`、`QUEUED`、`IN_PROGRESS`、`TIMED_OUT`、`CANCELLED`、`ACTION_REQUIRED`、`STARTUP_FAILURE`、`STALE`、`NEUTRAL`、`SKIPPED`；`review_decision` 支持空、`UNKNOWN`、`APPROVED`、`CHANGES_REQUESTED`、`REQUEST_CHANGES`、`REVIEW_REQUIRED`；`mergeable` 支持空、`UNKNOWN`、`MERGEABLE`、`CONFLICTING`、`CONFLICT`。状态值不区分大小写，其余字段缺失按空值处理，检查或合并状态为空、任一字段为 `UNKNOWN` 及词表外值均为 unknown。只有检查 `SUCCESS`、复审 `APPROVED` 或空、合并状态 `MERGEABLE` 才算稳定，未处理事件仍需看护。
