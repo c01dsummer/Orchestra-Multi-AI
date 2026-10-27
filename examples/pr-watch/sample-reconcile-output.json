@@ -19,11 +19,25 @@
         "number": 12,
         "head_sha": "abc123",
         "action": "dispatch_auto_fix",
-        "circuit_broken": false
+        "circuit_broken": false,
+        "comments": [
+          {
+            "event": "example-org/demo-project:PR#12:head=abc123:reviews:1",
+            "trusted": true,
+            "body": "请修复检查结果",
+            "action": "observe"
+          }
+        ],
+        "unhandled_events": [
+          "example-org/demo-project:PR#12:head=abc123:reviews:1"
+        ],
+        "round": 1,
+        "idempotency_key": "example-org/demo-project#12:abc123:round-1",
+        "requires_watch": true
       }
     ],
     "unhandled_events": [
-      "PR#12:head=abc123:review:1"
+      "example-org/demo-project:PR#12:head=abc123:reviews:1"
     ],
     "active_open_prs_requiring_watch": [
       "example-org/demo-project#12"

@@ -148,13 +148,86 @@
                       "dispatch_auto_fix",
                       "idempotent_skip",
                       "circuit_breaker_escalate",
-                      "blocked_unknown"
+                      "blocked_unknown",
+                      "dry_run_preview"
                     ]
                   },
                   "circuit_broken": {
                     "type": "boolean"
+                  },
+                  "round": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 1
+                  },
+                  "idempotency_key": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   }
-                }
+                },
+                "allOf": [
+                  {
+                    "if": {
+                      "properties": {
+                        "action": {
+                          "const": "dispatch_auto_fix"
+                        }
+                      },
+                      "required": [
+                        "action"
+                      ]
+                    },
+                    "then": {
+                      "required": [
+                        "round",
+                        "idempotency_key"
+                      ],
+                      "properties": {
+                        "round": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "idempotency_key": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "action": {
+                          "enum": [
+                            "blocked_unknown",
+                            "dry_run_preview"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "action"
+                      ]
+                    },
+                    "then": {
+                      "required": [
+                        "round",
+                        "idempotency_key"
+                      ],
+                      "properties": {
+                        "round": {
+                          "type": "null"
+                        },
+                        "idempotency_key": {
+                          "type": "null"
+                        }
+                      }
+                    }
+                  }
+                ]
               }
             },
             "unhandled_events": {
