@@ -4,7 +4,7 @@
 
 ## Stage 1（方案一）的边界
 
-本仓库公开协作 Skill 及辅助组件：技能入口、8 类角色模板（`roles/`）、6 项协作流程（`process/`）、跨家复审与路由规则表规范（`routing/`）、完全虚构的团队示例（`examples/`）、本地自检与导出脚本（`scripts/`），以及运行完成通知守护组件（`tools/run-done-watcher/`）。
+本仓库公开协作 Skill 及辅助组件：技能入口、8 类角色模板（`roles/`）、7 项协作流程（`process/`）、跨家复审与路由规则表规范（`routing/`）、完全虚构的团队示例（`examples/`）、本地自检与导出脚本（`scripts/`），以及运行完成通知守护组件（`tools/run-done-watcher/`）。
 
 **调用各家模型的命令行执行器或包装脚本由使用者根据自身环境自备，执行器保持私有，不随本仓库分发。**
 
@@ -23,7 +23,7 @@ Orchestra-Multi-AI/
 ├─ CHANGELOG.md                # 通用技能版本
 ├─ LICENSE                     # MIT
 ├─ roles/                      # 8 类职责、禁止事项和设定模板
-├─ process/                    # 派工、交接、复审、合并、改规矩、同步
+├─ process/                    # 派工、交接、复审、合并、改规矩、同步、关单
 ├─ routing/
 │  ├─ FORMAT.md                # 规则表格式版本 1
 │  └─ template.rules.json      # 含占位符的空白模板
@@ -95,6 +95,7 @@ Orchestra-Multi-AI/
 - [跨家复审](process/review.md) 依据全部作者的 `reviewers` 交集选引擎；同一家换模型仍算自审，失败的作者运行也计入。质量不过先修复再审，不能靠换引擎换结论。
 - [合并](process/merge.md) 同时要求自动检查通过、跨家复审通过、使用者明确批准。禁止强推覆盖保护分支历史；平台的保护设置由使用者按环境配置。
 - [改规矩](process/change-rules.md) 修改正本分支，按授权开合并请求，跑检查并复审，使用者批准合并后确认配置新版本生效，再 [同步](process/sync.md)。配置管理负责检查、备份、覆盖和核对，调度抽查；异常先恢复备份再提合并请求修复。
+- [统一任务关单标准](process/ticket-closure.md) v1.0（D1–D6 修订版）定义 `Done` / `Canceled` / `Duplicate`、10 类卡型及 L0/L1/L2 证据要求，结单回执扩展项目既有结构。项目记录采用版本和推广读回后的生效日，不追溯历史已结任务单。
 
 Stage 1 提供同步流程说明；线上目标和复制工具由使用者自备。配置版本取自 `config/CHANGELOG.md`；规则表的 `version: 1` 表示格式版本，仅修改内容不升级该字段。
 
