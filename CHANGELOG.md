@@ -12,13 +12,23 @@
 - 收紧导出文件白名单，校验作者引擎及完整配置，排除运行状态并以路径摘要绑定 watcher 状态。
 - 补全模板契约与本机路径检查，明确示例词表豁免、合并授权及同步检查位置。
 
-## PR 看护指南
+### PR 看护指南
 
 新增 `docs/pr-watchdog.md`、`scripts/pr-watch/schema.json` 和 `examples/pr-watch/`，提供隔离修复、对账水位线与虚构事件示例。
 
 - 明确缺少仓库名时输出的 `repo` 为 null，并同步 schema。
 - 收紧输出契约，六个事件及看护字段列为必填；明确决定性评审的取代顺序，非 ASCII 状态判为 `unknown`。
 - 澄清评审判定条件与作者 ASCII 规范，要求消费方对不完整分页或非单调时间戳按 `unknown` 处理。
-- 完成通知组件的心跳 `timezone` 字段值改为 `UTC+08:00`，心跳检查与测试同步更新。新旧版本的 watcher 和检查器混用时，心跳会被判为格式无效，造成误报，不会误放行；升级时同时更新 watcher 和检查器，重启 watcher，确认心跳已重写后再恢复巡检。依赖该字段的外部消费方也须同步更新。
-- 对账门槛错误文案改用 `UTC+08:00` 自然日表述，影响对账报告中的 `gate_errors`。
 - 对 `blocked_unknown` 强制 `requires_watch: true`，并说明单仓缺少仓库名时的回退键及适用范围。
+- 收紧输入完整性：统一仓库前缀形态，规范可信身份及事件标识，要求已提交事件时间戳非递减，并限制决定性评审的提交标识；`schema.json` 的 `repo` 收紧为 `null` 或匹配 `^[!-~]+$` 的非空可见 ASCII 字符串。
+- 持久状态 schema 校验 `prs` 键格式，拒绝在同一映射中混用有仓库前缀和无仓库前缀的键。
+- 对账顶层 `status` 新增 `unknown`，保留 `degraded_unknown` 向后兼容；完整性 `unknown` 时回滚水位线预留，保留 `circuit_breaker_escalate` 熔断告警。
+- 保留评审状态兼容别名及总体决议触发条件，按仓库、PR 和事件类型去重，并兼容省略 `reasons` 的历史版本 1 输出。
+
+### 完成通知组件
+
+- 不兼容变更：完成通知组件的心跳 `timezone` 字段值改为 `UTC+08:00`，新旧 watcher 与检查器混用会误报而不会误放行；外部消费方须同步更新。暂停和恢复心跳检查定时任务的升级步骤见 `tools/run-done-watcher/README.md`。
+- 对账门槛错误文案改用 `UTC+08:00` 自然日表述，影响对账报告中的 `gate_errors`。
+- 心跳 `timezone` 标识不一致时，`check-heartbeat.py` 输出结构化 `reason: "invalid_heartbeat_payload"` 和 `detail` 升级提示。
+- 补充心跳版本混用与对账窗口自检测试。
+- 澄清首次接入中断后的重启参数及末尾接入 pending 的续跑方式。

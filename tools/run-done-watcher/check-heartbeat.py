@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""由独立 routine 执行的一次性心跳检查；不联网、不发送通知。"""
+"""由独立的心跳检查定时任务执行的一次性心跳检查；不联网、不发送通知。"""
 
 import argparse
 import datetime as dt
@@ -23,12 +23,19 @@ def main(argv=None):
     try:
         heartbeat = json.loads(Path(args.heartbeat).read_text(encoding="utf-8"))
         updated = dt.datetime.fromisoformat(heartbeat["updated_at"])
-        if updated.tzinfo is None or heartbeat["timezone"] != "UTC+08:00":
+        if updated.tzinfo is None:
             raise ValueError()
         pending = heartbeat.get("pending", 0)
         oldest = heartbeat.get("oldest_pending_age_seconds", 0)
         if (type(pending) is not int or pending < 0
                 or type(oldest) not in (int, float) or not math.isfinite(oldest) or oldest < 0):
+            raise ValueError()
+        zone = heartbeat["timezone"]
+        if not isinstance(zone, str) or not zone:
+            raise ValueError()
+        if zone != "UTC+08:00":
+            result["detail"] = "版本不一致，请同时升级并重启 watcher"
+            result["reason"] = "invalid_heartbeat_payload"
             raise ValueError()
         age = (checked - updated).total_seconds()
         result["age_seconds"] = round(age, 1)
@@ -47,7 +54,7 @@ def main(argv=None):
             result["ok"] = True
         result["reason"] = reason
     except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
-        result["reason"] = "心跳缺失、不可读或格式无效"
+        result.setdefault("reason", "心跳缺失、不可读或格式无效")
     print(json.dumps(result, ensure_ascii=False))
     return 0 if result["ok"] else 1
 

@@ -19,6 +19,7 @@
         "number": 12,
         "head_sha": "abc123",
         "action": "dispatch_auto_fix",
+        "reasons": ["可信评审请求修复"],
         "circuit_broken": false,
         "comments": [
           {
