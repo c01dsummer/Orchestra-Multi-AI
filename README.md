@@ -39,7 +39,7 @@ Orchestra-Multi-AI/
 │  ├─ check.py                 # 严格校验实现，仅用标准库
 │  └─ export.sh                # 公开部分导出
 ├─ tools/run-done-watcher/     # 通知、心跳、对账和离线测试
-└─ .github/workflows/          # CI 格式与隐私检查
+└─ .github/workflows/          # CI 格式与隐私检查、离线测试
 ```
 
 项目仓库记录该项目的开发方法；跨助手协作规则放本技能。项目清单只是配置，任务沿用使用者现有的任务系统。

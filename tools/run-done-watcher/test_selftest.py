@@ -251,3 +251,8 @@ class PackageTest(unittest.TestCase):
                     path.write_text(original + "\n`" + "/" + base + tail + "`\n", encoding="utf-8")
                     self.assertIn("发现本机路径", self.check(expected=1).stderr)
                     self.assertIn("发现本机路径", self.ci(expected=1).stdout)
+
+
+if __name__ == "__main__":
+    # Direct runs include the imported watcher tests, as unittest discovery does.
+    unittest.main(verbosity=2)

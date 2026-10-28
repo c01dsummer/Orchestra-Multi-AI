@@ -234,3 +234,20 @@ jobs:
               print("::error::检查无法完成；异常内容不输出。")
               raise SystemExit(1)
           PY
+
+  offline-tests:
+    name: 离线测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 读取当前仓库
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # 只运行仓库自带的离线回归，不读取 secret，不发送请求。
+      - name: 组件离线回归（unittest discover）
+        run: python3 -B -m unittest discover -s tools/run-done-watcher -v
+      - name: 组件离线回归（selftest.py）
+        run: python3 -B tools/run-done-watcher/selftest.py
+      - name: 组件与通用包回归（test_selftest.py）
+        run: python3 -B tools/run-done-watcher/test_selftest.py
