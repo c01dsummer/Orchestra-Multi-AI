@@ -9,6 +9,11 @@
 - 明确合流准入节点：就绪 PR 检查通过、评审通过或审查完成无阻塞项（`action: "observe"`）且 `unhandled_events` 非空时，先向维护者汇报并附合流确认请求，汇报完成后才写入已汇报水位线，不得静默记账。
 - 新增“状态文件初始化”一节，说明巡检状态 JSON、已汇报运行列表、运行归属表、事件水位线和锁快照的初始化结构与单行标识符格式，以及按代理分开保存的要求。
 
+### 离线测试
+
+- CI 新增「离线测试」任务：在仓库根目录运行 `python3 -B -m unittest discover -s tools/run-done-watcher -v`，并直接运行 `tools/run-done-watcher/selftest.py` 与 `tools/run-done-watcher/test_selftest.py`；不读取 secret，不发送请求。
+- `test_selftest.py` 补上直接运行入口：此前直接运行时不执行任何测试即以 0 退出，现在执行通用包检查、导出回归及原有离线测试。
+
 ## v1
 
 - 提供多助手协作技能入口 `SKILL.md`，明确执行器由使用者自备。
