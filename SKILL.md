@@ -12,7 +12,7 @@ description: 多 AI 助手分工协作技能。接活、派工、交接、跨家
 1. 读 `config/team.json`，找到自己的角色与可用引擎；没有 `config/` 就停下，请使用者先配置，不猜。
 2. 读 `roles/<你的角色>.md` 与 `roles/README.md`，按职责和禁止事项做。角色名严格使用名单里的值。
 3. 调模型前查 `config/rules.json`：选引擎、模型与强度，遵守替补约定；格式见 `routing/FORMAT.md`，空白模板见 `routing/template.rules.json`。执行器自备；没有包装程序时直接按表选模型，并人工或用自有脚本核对跨家复审。
-4. 按 `process/README.md` 进入派工、交接、复审及批准合并流程，记录任务编号、全部实际引擎与模型、产出及下一角色。复审按 `reviewers` 取全部作者允许列表的交集，再排除作者引擎。
+4. 按 `process/README.md` 进入派工、交接、复审及批准合并流程，记录任务编号、全部实际引擎与模型、产出及下一角色。复审按 `reviewers` 取全部作者允许列表的交集，再排除作者引擎。项目按采用记录生效后，结单前读 `process/ticket-closure.md`，按 L0 / L1 / L2 与卡型核对 DoD，在既有状态块和回执中记录终态；取消写裁决及去向，重复核对全量覆盖。
 5. 改规矩走 `process/change-rules.md`，批准合并后按 `process/sync.md` 检查、备份、同步与抽查；配置版本取自 `config/CHANGELOG.md`。
 
 ## 四条底线
@@ -25,7 +25,7 @@ description: 多 AI 助手分工协作技能。接活、派工、交接、跨家
 ## 目录速查
 
 - `roles/`：8 类角色职责、禁止事项与设定模板。
-- `process/`：6 项流程，运行失败与质量不过分别处理。
+- `process/`：7 项流程，含统一任务关单标准 v1.0；按项目采用记录的生效日执行，不追溯历史已结任务单，运行失败与质量不过分别处理。
 - `routing/`：规则表格式和空白模板。
 - `examples/`：虚构团队、本地配置起点及完整设定示例。
 - `scripts/check.sh`、`scripts/export.sh`：本地自检和通用包导出。

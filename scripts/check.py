@@ -13,7 +13,7 @@ from urllib.parse import unquote, urlsplit
 ROOT = Path(__file__).resolve().parent.parent
 ROLES = ("调度", "开发", "复审", "调研", "平台对接", "审批", "用量", "配置管理")
 AUTHOR_ROLES = {"开发", "调研", "配置管理"}
-PROCESSES = ("dispatch", "handoff", "review", "merge", "change-rules", "sync")
+PROCESSES = ("dispatch", "handoff", "review", "merge", "change-rules", "sync", "ticket-closure")
 SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", ".venv", "node_modules", "build", "dist", "state"}
 SKIP_SUFFIXES = (".pyc", ".pyo", ".tar.gz", ".tmp", ".sqlite3", ".sqlite3-shm",
                  ".sqlite3-wal", ".lock", ".jsonl", ".log")
@@ -84,7 +84,7 @@ def core_files():
             and all((ROOT / path).is_dir() for path in directories), "核心目录或文件缺失。")
     for name in ("check.sh", "export.sh"):
         require(os.access(ROOT / "scripts" / name, os.X_OK), "脚本缺少可执行权限。")
-    print("通过：核心文件、8 类角色、6 项流程及辅助组件齐全。")
+    print("通过：核心文件、8 类角色、7 项流程及辅助组件齐全。")
 
 
 def rules(path, template=False):
