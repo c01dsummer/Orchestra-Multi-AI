@@ -251,3 +251,6 @@ jobs:
         run: python3 -B tools/run-done-watcher/selftest.py
       - name: 组件与通用包回归（test_selftest.py）
         run: python3 -B tools/run-done-watcher/test_selftest.py
+      # 作者启动门禁参考判定：纯计算，只跑虚构向量与合成快照，不调用模型。
+      - name: 作者门禁参考判定离线测试（unittest discover）
+        run: python3 -B -m unittest discover -s tools/author-gate-reference -v

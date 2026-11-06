@@ -1,0 +1,937 @@
+{
+  "format": "author-gate-vectors/1",
+  "notice": "作者启动门禁契约 author-launch/v2 的虚构测试向量。任务编号 W-A、W-A-CHILD、W-C、W-P 等，引擎 engine-alpha/beta/gamma，模型、入口、成员名、日期和摘要均为虚构，不对应任何真实任务、账号或批准。向量只供参考判定和使用者自己的执行器对照，通过不代表门禁已部署或生效。",
+  "policy": {
+    "version": "author-launch/v2",
+    "families": ["engine-alpha", "engine-beta", "engine-gamma"],
+    "high_risk_pair": ["engine-alpha", "engine-beta"],
+    "writer_lock_scope": "all",
+    "model_families": {
+      "alpha-code": "engine-alpha", "alpha-research": "engine-alpha",
+      "beta-code": "engine-beta", "beta-review": "engine-beta",
+      "gamma-code": "engine-gamma", "gamma-review": "engine-gamma"
+    },
+    "harness_families": {"harness-alpha": "engine-alpha", "harness-beta": "engine-beta"},
+    "default_harness": {"engine-alpha": "harness-alpha", "engine-beta": "harness-beta", "engine-gamma": "harness-shared"},
+    "ack_required": true,
+    "reviewers": {
+      "engine-alpha": ["engine-beta", "engine-gamma"],
+      "engine-beta": ["engine-alpha", "engine-gamma"],
+      "engine-gamma": ["engine-alpha", "engine-beta"]
+    },
+    "probe": {
+      "task_markers": ["probe", "status check", "recovery probe", "探测", "连通"],
+      "instruction_files": ["ALPHA.md", ".alpha", "BETA.md", ".beta"],
+      "input_sha256": "36f45128177480843e59f165d756f23d8e8aeb221efb3d5e4ba8eaaf7d23480c"
+    }
+  },
+  "vectors": [
+    {
+      "id": "lock-none-first-writer",
+      "covers": ["writer-lock"],
+      "note": "关联集没有作者：未锁，本次许可即成为锁的证据。",
+      "snapshot": {},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": true, "codes": [], "risk": "normal", "linked_ids": ["W-A"], "authors_before": [],
+                 "lock_before": {"state": "none", "family": null}, "affects_lock": true}
+    },
+    {
+      "id": "lock-single-family-same-engine",
+      "covers": ["writer-lock"],
+      "note": "单家历史直接沿用为锁；同家继续写放行。",
+      "snapshot": {"runs": [{"work_id": "W-A", "engine": "engine-beta", "role": "code", "actual_engine_families": ["engine-beta"], "result": "ok"}]},
+      "request": {"engine": "engine-beta", "role": "code", "work_id": "W-A", "ack": "W-A:engine-beta:code"},
+      "expect": {"allowed": true, "codes": [], "lock_before": {"state": "locked", "family": "engine-beta"}}
+    },
+    {
+      "id": "lock-single-family-other-engine",
+      "covers": ["writer-lock"],
+      "note": "锁属于另一家：普通风险在 scope=all 下也拒绝。",
+      "snapshot": {"runs": [{"work_id": "W-A", "engine": "engine-beta", "role": "code", "actual_engine_families": ["engine-beta"], "result": "ok"}]},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LOCK-MISMATCH"], "missing_approval": "lock_exception",
+                 "lock_before": {"state": "locked", "family": "engine-beta"}}
+    },
+    {
+      "id": "lock-human-only-no-engine-lock",
+      "covers": ["writer-lock"],
+      "note": "只有受管登记中的 human 作者：计入作者集，但不形成引擎锁。",
+      "snapshot": {"registry": {"authors": {"W-A": ["human"]}}},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": true, "codes": [], "authors_before": ["human"], "lock_before": {"state": "none", "family": null}}
+    },
+    {
+      "id": "lock-unknown-several-families",
+      "covers": ["writer-lock"],
+      "note": "多家作者且没有核实登记：锁为 unknown，阻塞待核，不猜。",
+      "snapshot": {"runs": [
+        {"work_id": "W-A", "engine": "engine-beta", "role": "code", "result": "ok"},
+        {"work_id": "W-A", "engine": "engine-alpha", "role": "other", "result": "ok"}]},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LOCK-UNKNOWN"], "missing_approval": "writer_lock_registration",
+                 "lock_before": {"state": "unknown", "family": null}}
+    },
+    {
+      "id": "lock-registered-family-wins",
+      "covers": ["writer-lock"],
+      "note": "受管登记的写方锁优先于派生结果。",
+      "snapshot": {"registry": {"writer_locks": {"W-A": "engine-alpha"}}, "runs": [
+        {"work_id": "W-A", "engine": "engine-beta", "role": "code", "result": "ok"},
+        {"work_id": "W-A", "engine": "engine-alpha", "role": "code", "result": "ok"}]},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": true, "codes": [], "lock_before": {"state": "locked", "family": "engine-alpha"}}
+    },
+    {
+      "id": "lock-registered-other-engine",
+      "covers": ["writer-lock"],
+      "note": "登记锁属于另一家：拒绝。",
+      "snapshot": {"registry": {"writer_locks": {"W-A": "engine-alpha"}}, "runs": [
+        {"work_id": "W-A", "engine": "engine-beta", "role": "code", "result": "ok"},
+        {"work_id": "W-A", "engine": "engine-alpha", "role": "code", "result": "ok"}]},
+      "request": {"engine": "engine-beta", "role": "code", "work_id": "W-A", "ack": "W-A:engine-beta:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LOCK-MISMATCH"]}
+    },
+    {
+      "id": "lock-registered-conflict",
+      "covers": ["writer-lock"],
+      "note": "关联任务的登记互相冲突：conflict，任何写入前先核对。",
+      "snapshot": {"registry": {"parents": {"W-A-CHILD": ["W-A"]}, "writer_locks": {"W-A": "engine-alpha", "W-A-CHILD": "engine-beta"}}},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LOCK-CONFLICT"], "missing_approval": "writer_lock_reconciliation",
+                 "linked_ids": ["W-A", "W-A-CHILD"], "lock_before": {"state": "conflict", "family": null}}
+    },
+    {
+      "id": "lock-untrusted-registration-refused",
+      "covers": ["writer-lock", "fail-closed"],
+      "note": "日志目录（不受信）中的写方锁登记一律拒绝，与 human 作者同一信任口径。",
+      "snapshot": {"log_registry": {"writer_locks": {"W-A": "engine-alpha"}}},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-SOURCE-REGISTRY-ENTRY"]}
+    },
+    {
+      "id": "lock-timed-out-run-still-authors",
+      "covers": ["writer-lock"],
+      "note": "失败、空输出、超时的运行同样计作者，锁不释放。",
+      "snapshot": {"runs": [{"work_id": "W-A", "engine": "engine-beta", "role": "code", "result": "timeout"}]},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LOCK-MISMATCH"], "authors_before": ["engine-beta"]}
+    },
+    {
+      "id": "lock-in-flight-permit-authors",
+      "covers": ["writer-lock", "permit"],
+      "note": "未作废的许可（在途或崩溃遗留，尚无运行记录）计作者并占锁。",
+      "snapshot": {"permits": [{"type": "permit", "permit_id": "p-0", "work_id": "W-A", "family": "engine-beta", "role": "code", "exception_id": null}]},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LOCK-MISMATCH"], "authors_before": ["engine-beta"]}
+    },
+    {
+      "id": "lock-voided-permit-not-author",
+      "covers": ["writer-lock", "permit"],
+      "note": "只有确定性证据证明从未启动、追加 void 之后，该许可才不计作者。",
+      "snapshot": {"permits": [
+        {"type": "permit", "permit_id": "p-0", "work_id": "W-A", "family": "engine-beta", "role": "code", "exception_id": null},
+        {"type": "void", "permit_id": "p-0", "work_id": "W-A", "reason": "never_started"}]},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": true, "codes": [], "authors_before": [], "lock_before": {"state": "none", "family": null}}
+    },
+    {
+      "id": "lock-scope-high-normal-risk",
+      "covers": ["writer-lock"],
+      "note": "writer_lock_scope=high 时普通风险不按锁拒绝；lock_before 仍如实报告派生结果。",
+      "policy": {"writer_lock_scope": "high"},
+      "snapshot": {"runs": [{"work_id": "W-A", "engine": "engine-beta", "role": "code", "result": "ok"}]},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": true, "codes": [], "lock_before": {"state": "locked", "family": "engine-beta"}}
+    },
+    {
+      "id": "lock-scope-high-high-risk",
+      "covers": ["writer-lock", "second-family"],
+      "note": "writer_lock_scope=high 时高风险仍按锁判定。",
+      "policy": {"writer_lock_scope": "high"},
+      "snapshot": {"registry": {"high_risk": ["W-A"]}, "runs": [{"work_id": "W-A", "engine": "engine-beta", "role": "code", "result": "ok"}]},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LOCK-MISMATCH", "AUTHOR-LAUNCH-SECOND-FAMILY"]}
+    },
+    {
+      "id": "closure-three-hops-across-registries",
+      "covers": ["linked-set"],
+      "note": "parents 跨两份登记、双向三跳都并入关联集。",
+      "snapshot": {
+        "registry": {"parents": {"W-A-CHILD": ["W-A"], "W-A-CHILD-3": ["W-A-CHILD-2"]}},
+        "log_registry": {"parents": {"W-A-CHILD-2": "W-A-CHILD"}},
+        "runs": [{"work_id": "W-A", "engine": "engine-beta", "role": "code", "result": "ok"}]},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A-CHILD-3", "ack": "W-A-CHILD-3:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LOCK-MISMATCH"],
+                 "linked_ids": ["W-A", "W-A-CHILD", "W-A-CHILD-2", "W-A-CHILD-3"]}
+    },
+    {
+      "id": "closure-disjoint-sets-independent",
+      "covers": ["linked-set", "writer-lock"],
+      "note": "两个不相交的关联集分属不同家族，互不影响。",
+      "snapshot": {"runs": [
+        {"work_id": "W-A", "engine": "engine-beta", "role": "code", "result": "ok"},
+        {"work_id": "W-C", "engine": "engine-alpha", "role": "code", "result": "ok"}]},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-C", "ack": "W-C:engine-alpha:code"},
+      "expect": {"allowed": true, "codes": [], "linked_ids": ["W-C"], "authors_before": ["engine-alpha"]}
+    },
+    {
+      "id": "same-family-other-model",
+      "covers": ["writer-lock", "family"],
+      "note": "同一家换模型或凭据档位仍是同一家，不误判为两家。",
+      "snapshot": {"registry": {"high_risk": ["W-A"]}, "runs": [
+        {"work_id": "W-A", "engine": "engine-alpha", "role": "code", "actual_engine_families": ["engine-alpha"], "result": "ok"}]},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "model": "alpha-research", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": true, "codes": [], "risk": "high"}
+    },
+    {
+      "id": "second-family-refused-with-matching-ack",
+      "covers": ["second-family"],
+      "note": "高风险已有 engine-beta 作者，engine-alpha 带逐字匹配的知情声明仍拒绝；声明不是批准。",
+      "snapshot": {"registry": {"high_risk": ["W-A"]}, "runs": [
+        {"work_id": "W-A", "engine": "engine-beta", "role": "code", "actual_engine_families": ["engine-beta"], "result": "ok"}]},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LOCK-MISMATCH", "AUTHOR-LAUNCH-SECOND-FAMILY"],
+                 "missing_approval": "lock_exception", "risk": "high"}
+    },
+    {
+      "id": "second-family-with-registered-lock",
+      "covers": ["second-family"],
+      "note": "即使登记锁属于本家，(a) 仍独立拒绝第二家。",
+      "snapshot": {"registry": {"high_risk": ["W-A"], "writer_locks": {"W-A": "engine-alpha"}}, "runs": [
+        {"work_id": "W-A", "engine": "engine-beta", "role": "code", "result": "ok"}]},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LAUNCH-SECOND-FAMILY"], "missing_approval": "second_family_exception",
+                 "lock_before": {"state": "locked", "family": "engine-alpha"}}
+    },
+    {
+      "id": "second-family-high-risk-from-linked-task",
+      "covers": ["second-family", "linked-set"],
+      "note": "高风险登记在关联任务上，同样按高风险判定。",
+      "snapshot": {"registry": {"high_risk": ["W-A-CHILD"], "parents": {"W-A-CHILD": ["W-A"]}}, "runs": [
+        {"work_id": "W-A", "engine": "engine-beta", "role": "code", "result": "ok"}]},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LOCK-MISMATCH", "AUTHOR-LAUNCH-SECOND-FAMILY"], "risk": "high"}
+    },
+    {
+      "id": "high-risk-declared-normal-refused",
+      "covers": ["risk", "fail-closed"],
+      "note": "已登记高风险却自报 normal：拒绝。",
+      "snapshot": {"registry": {"high_risk": ["W-A"]}},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "risk": "normal", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LAUNCH-DENIED"], "reason": "risk-conflict"}
+    },
+    {
+      "id": "high-risk-first-writer",
+      "covers": ["second-family"],
+      "note": "高风险关联集的第一位写方放行。",
+      "snapshot": {"registry": {"high_risk": ["W-A"]}},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": true, "codes": [], "risk": "high", "lock_before": {"state": "none", "family": null}}
+    },
+    {
+      "id": "high-risk-family-outside-pair",
+      "covers": ["second-family", "writer-lock"],
+      "note": "成对家族之外的第三家不触发第二家规则，但仍受写方锁约束。",
+      "snapshot": {"registry": {"high_risk": ["W-A"]}, "runs": [{"work_id": "W-A", "engine": "engine-beta", "role": "code", "result": "ok"}]},
+      "request": {"engine": "engine-gamma", "role": "code", "work_id": "W-A", "model": "gamma-code", "ack": "W-A:engine-gamma:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LOCK-MISMATCH"]}
+    },
+    {
+      "id": "dual-existing-pair-family",
+      "covers": ["dual-existing"],
+      "note": "高风险已有两家作者：不因本次没有新增家族而放行。",
+      "snapshot": {"registry": {"high_risk": ["W-A"]}, "runs": [
+        {"work_id": "W-A", "engine": "engine-beta", "role": "code", "result": "ok"},
+        {"work_id": "W-A", "engine": "engine-alpha", "role": "code", "result": "failed"}]},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LOCK-UNKNOWN", "AUTHOR-LAUNCH-DUAL-EXISTING"],
+                 "missing_approval": "writer_lock_registration"}
+    },
+    {
+      "id": "dual-existing-third-family",
+      "covers": ["dual-existing"],
+      "note": "已双作者时第三家同样被拒。",
+      "snapshot": {"registry": {"high_risk": ["W-A"]}, "runs": [
+        {"work_id": "W-A", "engine": "engine-beta", "role": "code", "result": "ok"},
+        {"work_id": "W-A", "engine": "engine-alpha", "role": "code", "result": "ok"}]},
+      "request": {"engine": "engine-gamma", "role": "code", "work_id": "W-A", "model": "gamma-code", "ack": "W-A:engine-gamma:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LOCK-UNKNOWN", "AUTHOR-LAUNCH-DUAL-EXISTING"]}
+    },
+    {
+      "id": "dual-existing-with-registered-lock",
+      "covers": ["dual-existing"],
+      "note": "核实登记原写家之后，已双作者仍单独拒绝，只能用受管例外。",
+      "snapshot": {"registry": {"high_risk": ["W-A"], "writer_locks": {"W-A": "engine-alpha"}}, "runs": [
+        {"work_id": "W-A", "engine": "engine-beta", "role": "code", "result": "ok"},
+        {"work_id": "W-A", "engine": "engine-alpha", "role": "code", "result": "ok"}]},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LAUNCH-DUAL-EXISTING"], "missing_approval": "second_family_exception"}
+    },
+    {
+      "id": "dual-existing-review-alpha",
+      "covers": ["dual-existing", "review"],
+      "note": "已双作者的高风险任务：作者家族不能复审，门禁不恢复模型审。",
+      "snapshot": {"registry": {"high_risk": ["W-A"]}, "runs": [
+        {"work_id": "W-A", "engine": "engine-beta", "role": "code", "result": "ok"},
+        {"work_id": "W-A", "engine": "engine-alpha", "role": "code", "result": "ok"}]},
+      "request": {"engine": "engine-alpha", "role": "review", "work_id": "W-A", "risk": "high"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LAUNCH-DENIED"], "reason": "review-author"}
+    },
+    {
+      "id": "dual-existing-review-beta",
+      "covers": ["dual-existing", "review"],
+      "note": "同上，另一家作者也不能复审。",
+      "snapshot": {"registry": {"high_risk": ["W-A"]}, "runs": [
+        {"work_id": "W-A", "engine": "engine-beta", "role": "code", "result": "ok"},
+        {"work_id": "W-A", "engine": "engine-alpha", "role": "code", "result": "ok"}]},
+      "request": {"engine": "engine-beta", "role": "review", "work_id": "W-A", "risk": "high"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LAUNCH-DENIED"], "reason": "review-author"}
+    },
+    {
+      "id": "dual-existing-review-third-family",
+      "covers": ["dual-existing", "review"],
+      "note": "高风险复审只接受成对家族；两家都已是作者时没有可用的模型复审。",
+      "snapshot": {"registry": {"high_risk": ["W-A"]}, "runs": [
+        {"work_id": "W-A", "engine": "engine-beta", "role": "code", "result": "ok"},
+        {"work_id": "W-A", "engine": "engine-alpha", "role": "code", "result": "ok"}]},
+      "request": {"engine": "engine-gamma", "role": "review", "work_id": "W-A", "risk": "high"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LAUNCH-DENIED"], "reason": "review-high-risk-family"}
+    },
+    {
+      "id": "review-takes-no-lock",
+      "covers": ["review"],
+      "note": "复审不抢锁、不计作者，也签许可供交付证据核对。",
+      "snapshot": {"runs": [{"work_id": "W-A", "engine": "engine-beta", "role": "code", "result": "ok"}]},
+      "request": {"engine": "engine-alpha", "role": "review", "work_id": "W-A", "risk": "normal"},
+      "expect": {"allowed": true, "codes": [], "affects_lock": false, "authors_before": ["engine-beta"],
+                 "lock_before": {"state": "locked", "family": "engine-beta"}}
+    },
+    {
+      "id": "review-requires-explicit-risk",
+      "covers": ["review", "risk"],
+      "note": "复审须显式写风险等级。",
+      "snapshot": {"runs": [{"work_id": "W-A", "engine": "engine-beta", "role": "code", "result": "ok"}]},
+      "request": {"engine": "engine-alpha", "role": "review", "work_id": "W-A"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LAUNCH-DENIED"], "reason": "risk-required"}
+    },
+    {
+      "id": "review-without-authors-refused",
+      "covers": ["review", "fail-closed"],
+      "note": "作者记录缺失时不能默认放行复审。",
+      "snapshot": {},
+      "request": {"engine": "engine-alpha", "role": "review", "work_id": "W-A", "risk": "normal"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LAUNCH-DENIED"], "reason": "review-no-author"}
+    },
+    {
+      "id": "family-preflight-other-family-model",
+      "covers": ["family"],
+      "note": "解析出的模型属于另一家：请求发出前拒绝，不可由批准解除。",
+      "snapshot": {},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "model": "beta-review", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-FAMILY-PREFLIGHT"], "missing_approval": null}
+    },
+    {
+      "id": "family-unprovable-high-risk",
+      "covers": ["family"],
+      "note": "高风险下模型名不在受管表、入口也不能证明家族：拒绝。",
+      "snapshot": {"registry": {"high_risk": ["W-A"]}},
+      "request": {"engine": "engine-gamma", "role": "code", "work_id": "W-A", "model": "mystery-model", "ack": "W-A:engine-gamma:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-FAMILY-UNPROVABLE"], "missing_approval": null}
+    },
+    {
+      "id": "family-proven-by-single-family-harness",
+      "covers": ["family"],
+      "note": "只能连到一家的入口可以证明家族。",
+      "snapshot": {"registry": {"high_risk": ["W-A"]}},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "model": "mystery-model", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": true, "codes": []}
+    },
+    {
+      "id": "family-unresolved-model-at-early-check",
+      "covers": ["family"],
+      "note": "早检时模型尚未解析：不判无法证明；权威许可在解析后重判。",
+      "snapshot": {"registry": {"high_risk": ["W-A"]}},
+      "request": {"engine": "engine-gamma", "role": "code", "work_id": "W-A", "ack": "W-A:engine-gamma:code"},
+      "expect": {"allowed": true, "codes": []}
+    },
+    {
+      "id": "fail-policy-pair-invalid",
+      "covers": ["fail-closed"],
+      "note": "受管策略缺失或无效：拒绝。",
+      "policy": {"high_risk_pair": ["engine-alpha"]},
+      "snapshot": {},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-POLICY"]}
+    },
+    {
+      "id": "fail-policy-version",
+      "covers": ["fail-closed"],
+      "note": "策略版本不符：拒绝，不猜着读。",
+      "policy": {"version": "author-launch/v1"},
+      "snapshot": {},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-POLICY"]}
+    },
+    {
+      "id": "fail-registry-unreadable",
+      "covers": ["fail-closed"],
+      "note": "登记读不了：拒绝。",
+      "snapshot": {"unavailable": ["registry"]},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-SOURCE-REGISTRY-READ"]}
+    },
+    {
+      "id": "fail-run-ledger-unreadable",
+      "covers": ["fail-closed"],
+      "note": "运行记录读不了：拒绝。",
+      "snapshot": {"unavailable": ["runs"]},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-SOURCE-LEDGER-READ"]}
+    },
+    {
+      "id": "fail-permit-ledger-unreadable",
+      "covers": ["fail-closed", "permit"],
+      "note": "许可账本读不了：拒绝。",
+      "snapshot": {"unavailable": ["permits"]},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-PERMIT-READ"]}
+    },
+    {
+      "id": "fail-launch-lock-busy",
+      "covers": ["fail-closed", "permit"],
+      "note": "全局启动锁在有限等待内取不到：拒绝，不排队启动。",
+      "snapshot": {"unavailable": ["launch_lock"]},
+      "stage": "permit",
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LOCK-BUSY"], "permit": null}
+    },
+    {
+      "id": "fail-permit-write",
+      "covers": ["fail-closed", "permit"],
+      "note": "许可写入或落盘失败：拒绝，不启动。",
+      "snapshot": {"unavailable": ["permit_write"]},
+      "stage": "permit",
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-PERMIT-WRITE"], "permit": null}
+    },
+    {
+      "id": "fail-permit-record-in-set",
+      "covers": ["fail-closed", "permit"],
+      "note": "关联集内的许可记录损坏：拒绝。",
+      "snapshot": {"permits": [{"type": "permit", "work_id": "W-A", "family": "engine-beta"}]},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-PERMIT-FORMAT"]}
+    },
+    {
+      "id": "fail-permit-record-outside-set-skipped",
+      "covers": ["fail-closed", "permit"],
+      "note": "关联集外的坏许可记录只告警跳过，不升级为全局拒绝。",
+      "snapshot": {"permits": [{"type": "permit", "work_id": "W-C"}]},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": true, "codes": [], "warnings": ["permit-record-outside-set-skipped"]}
+    },
+    {
+      "id": "fail-run-row-unknown-family",
+      "covers": ["fail-closed"],
+      "note": "关联集内的运行记录写着未知家族：拒绝，需人工核对。",
+      "snapshot": {"runs": [{"work_id": "W-A", "engine": "engine-delta", "role": "code", "result": "ok"}]},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-SOURCE-LEDGER-ENTRY"]}
+    },
+    {
+      "id": "fail-relation-invalid-in-set",
+      "covers": ["fail-closed", "linked-set"],
+      "note": "关联集内的 parents 关系无效：拒绝。",
+      "snapshot": {"registry": {"parents": {"W-A-CHILD": 42}}},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A-CHILD", "ack": "W-A-CHILD:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-SOURCE-RELATIONS"]}
+    },
+    {
+      "id": "fail-human-author-in-untrusted-registry",
+      "covers": ["fail-closed"],
+      "note": "human 作者只认受管登记；日志目录登记 human 时拒绝。",
+      "snapshot": {"log_registry": {"authors": {"W-A": ["human"]}}},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LAUNCH-DENIED"], "reason": "human-author-untrusted"}
+    },
+    {
+      "id": "fail-request-unknown-field",
+      "covers": ["fail-closed"],
+      "note": "请求含未知字段：拒绝，不猜含义。",
+      "snapshot": {},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code", "prompt": "W-A synthetic prompt v1"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LAUNCH-DENIED"], "reason": "request"}
+    },
+    {
+      "id": "ack-missing-refused",
+      "covers": ["ack"],
+      "note": "要求知情声明的正式任务缺声明：拒绝；声明排在硬判定之后。",
+      "snapshot": {},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LAUNCH-DENIED"], "reason": "ack"}
+    },
+    {
+      "id": "probe-runner-made-cwd",
+      "covers": ["probe-isolation"],
+      "note": "当日、本助手、未关联的临时编号，role other，不传目录（运行器自建 0700 空目录），用户级指令不存在。",
+      "snapshot": {"adhoc": {"W-P": {"day": "D1", "agent": "代码员"}}},
+      "request": {"engine": "engine-alpha", "role": "other", "work_id": "W-P", "probe": true, "agent": "代码员", "today": "D1",
+                  "home": {"instruction_files_present": false, "entry_masks_home": false}},
+      "expect": {"allowed": true, "codes": [], "purpose": "probe", "affects_lock": true}
+    },
+    {
+      "id": "probe-status-purpose",
+      "covers": ["probe-purpose"],
+      "note": "状态检查用 purpose=status，同样只能带 probe。",
+      "snapshot": {"adhoc": {"W-P": {"day": "D1", "agent": "代码员"}}},
+      "request": {"engine": "engine-alpha", "role": "other", "work_id": "W-P", "probe": true, "purpose": "status", "agent": "代码员", "today": "D1",
+                  "home": {"instruction_files_present": false, "entry_masks_home": false}},
+      "expect": {"allowed": true, "codes": [], "purpose": "status"}
+    },
+    {
+      "id": "probe-on-formal-task",
+      "covers": ["probe-identity"],
+      "note": "探测挂正式任务：拒绝。",
+      "snapshot": {},
+      "request": {"engine": "engine-alpha", "role": "other", "work_id": "W-A", "probe": true, "agent": "代码员", "today": "D1",
+                  "ack": "W-A:engine-alpha:other", "home": {"instruction_files_present": false, "entry_masks_home": false}},
+      "expect": {"allowed": false, "codes": ["PROBE-IDENTITY"]}
+    },
+    {
+      "id": "probe-on-linked-adhoc",
+      "covers": ["probe-identity"],
+      "note": "临时编号经 parents 连到正式任务：按正式任务处理，探测拒绝。",
+      "snapshot": {"adhoc": {"W-P": {"day": "D1", "agent": "代码员"}}, "registry": {"parents": {"W-P": ["W-A"]}}},
+      "request": {"engine": "engine-alpha", "role": "other", "work_id": "W-P", "probe": true, "agent": "代码员", "today": "D1",
+                  "home": {"instruction_files_present": false, "entry_masks_home": false}},
+      "expect": {"allowed": false, "codes": ["PROBE-IDENTITY"]}
+    },
+    {
+      "id": "probe-on-stale-adhoc",
+      "covers": ["probe-identity"],
+      "note": "非当日的临时编号：拒绝，提示改用当日、本助手的编号，不自动改号。",
+      "snapshot": {"adhoc": {"W-P-OLD": {"day": "D0", "agent": "代码员"}}},
+      "request": {"engine": "engine-alpha", "role": "other", "work_id": "W-P-OLD", "probe": true, "agent": "代码员", "today": "D1",
+                  "home": {"instruction_files_present": false, "entry_masks_home": false}},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LAUNCH-DENIED"], "reason": "adhoc-identity"}
+    },
+    {
+      "id": "probe-on-foreign-adhoc",
+      "covers": ["probe-identity"],
+      "note": "属于其他助手的临时编号：拒绝。",
+      "snapshot": {"adhoc": {"W-P-OTHER": {"day": "D1", "agent": "巡检员"}}},
+      "request": {"engine": "engine-alpha", "role": "other", "work_id": "W-P-OTHER", "probe": true, "agent": "代码员", "today": "D1",
+                  "home": {"instruction_files_present": false, "entry_masks_home": false}},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LAUNCH-DENIED"], "reason": "adhoc-identity"}
+    },
+    {
+      "id": "probe-role-code",
+      "covers": ["probe-identity"],
+      "note": "独立临时编号的非复审运行只能 role other。",
+      "snapshot": {"adhoc": {"W-P": {"day": "D1", "agent": "代码员"}}},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-P", "probe": true, "agent": "代码员", "today": "D1",
+                  "home": {"instruction_files_present": false, "entry_masks_home": false}},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LAUNCH-DENIED"], "reason": "adhoc-role"}
+    },
+    {
+      "id": "probe-role-review",
+      "covers": ["probe-identity"],
+      "note": "探测不能以 review 身份运行。",
+      "snapshot": {"adhoc": {"W-P": {"day": "D1", "agent": "代码员"}}},
+      "request": {"engine": "engine-alpha", "role": "review", "work_id": "W-P", "risk": "normal", "probe": true, "agent": "代码员", "today": "D1",
+                  "home": {"instruction_files_present": false, "entry_masks_home": false}},
+      "expect": {"allowed": false, "codes": ["PROBE-IDENTITY"]}
+    },
+    {
+      "id": "probe-business-input",
+      "covers": ["probe-identity"],
+      "note": "探测携带业务输入（提示文本、提示文件、非空标准输入、提交或额外授权）：拒绝。",
+      "snapshot": {"adhoc": {"W-P": {"day": "D1", "agent": "代码员"}}},
+      "request": {"engine": "engine-alpha", "role": "other", "work_id": "W-P", "probe": true, "business_input": true, "agent": "代码员", "today": "D1",
+                  "home": {"instruction_files_present": false, "entry_masks_home": false}},
+      "expect": {"allowed": false, "codes": ["PROBE-INPUT"]}
+    },
+    {
+      "id": "probe-cwd-not-empty",
+      "covers": ["probe-isolation"],
+      "note": "自传目录不为空：拒绝。",
+      "snapshot": {"adhoc": {"W-P": {"day": "D1", "agent": "代码员"}}},
+      "request": {"engine": "engine-alpha", "role": "other", "work_id": "W-P", "probe": true, "agent": "代码员", "today": "D1",
+                  "cwd": {"absolute": true, "real_directory": true, "owned_by_caller": true, "mode": "0700", "empty": false, "names_on_path": []},
+                  "home": {"instruction_files_present": false, "entry_masks_home": false}},
+      "expect": {"allowed": false, "codes": ["PROBE-ISOLATION-CWD"], "reason": "empty"}
+    },
+    {
+      "id": "probe-cwd-ancestor-instruction-file",
+      "covers": ["probe-isolation"],
+      "note": "目录自身或祖先目录含受管名单中的指令文件：拒绝。",
+      "snapshot": {"adhoc": {"W-P": {"day": "D1", "agent": "代码员"}}},
+      "request": {"engine": "engine-alpha", "role": "other", "work_id": "W-P", "probe": true, "agent": "代码员", "today": "D1",
+                  "cwd": {"absolute": true, "real_directory": true, "owned_by_caller": true, "mode": "0700", "empty": true, "names_on_path": ["ALPHA.md"]},
+                  "home": {"instruction_files_present": false, "entry_masks_home": false}},
+      "expect": {"allowed": false, "codes": ["PROBE-ISOLATION-CWD"], "reason": "instruction-file"}
+    },
+    {
+      "id": "probe-cwd-mode",
+      "covers": ["probe-isolation"],
+      "note": "权限不是 0700 或不属当前用户：拒绝。",
+      "snapshot": {"adhoc": {"W-P": {"day": "D1", "agent": "代码员"}}},
+      "request": {"engine": "engine-alpha", "role": "other", "work_id": "W-P", "probe": true, "agent": "代码员", "today": "D1",
+                  "cwd": {"absolute": true, "real_directory": true, "owned_by_caller": true, "mode": "0755", "empty": true, "names_on_path": []},
+                  "home": {"instruction_files_present": false, "entry_masks_home": false}},
+      "expect": {"allowed": false, "codes": ["PROBE-ISOLATION-CWD"], "reason": "owner-mode"}
+    },
+    {
+      "id": "probe-cwd-verified",
+      "covers": ["probe-isolation"],
+      "note": "自传目录逐项核验通过：放行。",
+      "snapshot": {"adhoc": {"W-P": {"day": "D1", "agent": "代码员"}}},
+      "request": {"engine": "engine-alpha", "role": "other", "work_id": "W-P", "probe": true, "agent": "代码员", "today": "D1",
+                  "cwd": {"absolute": true, "real_directory": true, "owned_by_caller": true, "mode": "0700", "empty": true, "names_on_path": []},
+                  "home": {"instruction_files_present": false, "entry_masks_home": false}},
+      "expect": {"allowed": true, "codes": []}
+    },
+    {
+      "id": "probe-home-instructions-unmasked",
+      "covers": ["probe-isolation"],
+      "note": "用户级指令文件存在且本入口无法证明已遮蔽：拒绝，改读本地状态。",
+      "snapshot": {"adhoc": {"W-P": {"day": "D1", "agent": "代码员"}}},
+      "request": {"engine": "engine-alpha", "role": "other", "work_id": "W-P", "probe": true, "agent": "代码员", "today": "D1",
+                  "home": {"instruction_files_present": true, "entry_masks_home": false}},
+      "expect": {"allowed": false, "codes": ["PROBE-ISOLATION-UNVERIFIED"]}
+    },
+    {
+      "id": "probe-home-instructions-masked",
+      "covers": ["probe-isolation"],
+      "note": "入口能证明已遮蔽用户级指令：放行。",
+      "snapshot": {"adhoc": {"W-P": {"day": "D1", "agent": "代码员"}}},
+      "request": {"engine": "engine-alpha", "role": "other", "work_id": "W-P", "probe": true, "agent": "代码员", "today": "D1",
+                  "home": {"instruction_files_present": true, "entry_masks_home": true}},
+      "expect": {"allowed": true, "codes": []}
+    },
+    {
+      "id": "probe-home-unobserved",
+      "covers": ["probe-isolation", "fail-closed"],
+      "note": "没有用户级指令的核查结果：无法证明隔离，拒绝。",
+      "snapshot": {"adhoc": {"W-P": {"day": "D1", "agent": "代码员"}}},
+      "request": {"engine": "engine-alpha", "role": "other", "work_id": "W-P", "probe": true, "agent": "代码员", "today": "D1"},
+      "expect": {"allowed": false, "codes": ["PROBE-ISOLATION-UNVERIFIED"], "reason": "observation"}
+    },
+    {
+      "id": "probe-adhoc-locked-by-other-family",
+      "covers": ["probe-isolation", "writer-lock"],
+      "note": "探测仍计临时编号作者、受写方锁约束；撞锁拒绝，不改编号。",
+      "snapshot": {"adhoc": {"W-P": {"day": "D1", "agent": "代码员"}}, "runs": [{"work_id": "W-P", "engine": "engine-beta", "role": "other", "result": "ok"}]},
+      "request": {"engine": "engine-alpha", "role": "other", "work_id": "W-P", "probe": true, "agent": "代码员", "today": "D1",
+                  "home": {"instruction_files_present": false, "entry_masks_home": false}},
+      "expect": {"allowed": false, "codes": ["AUTHOR-LOCK-MISMATCH"], "work_id": "W-P"}
+    },
+    {
+      "id": "probe-isolation-before-lock",
+      "covers": ["probe-isolation", "writer-lock"],
+      "note": "探测校验先于写方锁：目录不中性时先报目录问题。",
+      "snapshot": {"adhoc": {"W-P": {"day": "D1", "agent": "代码员"}}, "runs": [{"work_id": "W-P", "engine": "engine-beta", "role": "other", "result": "ok"}]},
+      "request": {"engine": "engine-alpha", "role": "other", "work_id": "W-P", "probe": true, "agent": "代码员", "today": "D1",
+                  "cwd": {"absolute": true, "real_directory": true, "owned_by_caller": true, "mode": "0700", "empty": false, "names_on_path": []},
+                  "home": {"instruction_files_present": false, "entry_masks_home": false}},
+      "expect": {"allowed": false, "codes": ["PROBE-ISOLATION-CWD"]}
+    },
+    {
+      "id": "purpose-probe-with-work",
+      "covers": ["probe-purpose"],
+      "note": "probe 与 purpose=work 矛盾：拒绝。",
+      "snapshot": {"adhoc": {"W-P": {"day": "D1", "agent": "代码员"}}},
+      "request": {"engine": "engine-alpha", "role": "other", "work_id": "W-P", "probe": true, "purpose": "work", "agent": "代码员", "today": "D1",
+                  "home": {"instruction_files_present": false, "entry_masks_home": false}},
+      "expect": {"allowed": false, "codes": ["PROBE-PURPOSE-CONFLICT"], "reason": "probe-with-work"}
+    },
+    {
+      "id": "purpose-probe-without-probe",
+      "covers": ["probe-purpose"],
+      "note": "purpose=probe 而没有 probe：拒绝。",
+      "snapshot": {},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "purpose": "probe", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["PROBE-PURPOSE-CONFLICT"], "reason": "purpose-without-probe"}
+    },
+    {
+      "id": "purpose-status-without-probe",
+      "covers": ["probe-purpose"],
+      "note": "purpose=status 而没有 probe：拒绝。",
+      "snapshot": {},
+      "request": {"engine": "engine-alpha", "role": "other", "work_id": "W-A", "purpose": "status", "ack": "W-A:engine-alpha:other"},
+      "expect": {"allowed": false, "codes": ["PROBE-PURPOSE-CONFLICT"], "reason": "purpose-without-probe"}
+    },
+    {
+      "id": "purpose-unknown-value",
+      "covers": ["probe-purpose"],
+      "note": "purpose 只能是 probe、status、work。",
+      "snapshot": {},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "purpose": "debug", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["PROBE-PURPOSE-CONFLICT"], "reason": "purpose-value"}
+    },
+    {
+      "id": "purpose-ambiguous-label-formal-task",
+      "covers": ["probe-purpose"],
+      "note": "没写 purpose、没带 probe，任务标签读作探测：拒绝；业务排障请显式写 purpose=work。",
+      "snapshot": {},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "task": "Recovery-Probe", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": false, "codes": ["PROBE-PURPOSE-AMBIGUOUS"]}
+    },
+    {
+      "id": "purpose-ambiguous-label-adhoc",
+      "covers": ["probe-purpose"],
+      "note": "非 ASCII 提示词按子串匹配。",
+      "snapshot": {"adhoc": {"W-P": {"day": "D1", "agent": "代码员"}}},
+      "request": {"engine": "engine-alpha", "role": "other", "work_id": "W-P", "task": "连通性检查", "agent": "代码员", "today": "D1"},
+      "expect": {"allowed": false, "codes": ["PROBE-PURPOSE-AMBIGUOUS"]}
+    },
+    {
+      "id": "purpose-ambiguous-label-review",
+      "covers": ["probe-purpose", "review"],
+      "note": "标签提示对所有角色生效。",
+      "snapshot": {"runs": [{"work_id": "W-A", "engine": "engine-beta", "role": "code", "result": "ok"}]},
+      "request": {"engine": "engine-alpha", "role": "review", "work_id": "W-A", "risk": "normal", "task": "STATUS_CHECK"},
+      "expect": {"allowed": false, "codes": ["PROBE-PURPOSE-AMBIGUOUS"]}
+    },
+    {
+      "id": "purpose-work-overrides-label",
+      "covers": ["probe-purpose"],
+      "note": "显式 purpose=work 时按业务运行判定。",
+      "snapshot": {},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "task": "probe 失败排查", "purpose": "work", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": true, "codes": [], "purpose": "work"}
+    },
+    {
+      "id": "purpose-label-word-boundary",
+      "covers": ["probe-purpose"],
+      "note": "ASCII 提示词按词边界匹配，reprobe 不命中；只看标签，不扫正文。",
+      "snapshot": {},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "task": "reprobe tuning", "ack": "W-A:engine-alpha:code"},
+      "expect": {"allowed": true, "codes": [], "purpose": "work"}
+    },
+    {
+      "id": "exception-source-missing",
+      "covers": ["exception", "fail-closed"],
+      "note": "引用例外但受管例外文档读不到：例外码在前，其余判定码随后。",
+      "snapshot": {"registry": {"high_risk": ["W-A"]}, "runs": [{"work_id": "W-A", "engine": "engine-beta", "role": "code", "result": "ok"}]},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code",
+                  "exception_id": "EXC-W-A-1", "now": "2026-01-02T00:00:00+00:00"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-EXCEPTION-SOURCE", "AUTHOR-LOCK-MISMATCH", "AUTHOR-LAUNCH-SECOND-FAMILY"],
+                 "missing_approval": null}
+    },
+    {
+      "id": "exception-document-malformed",
+      "covers": ["exception", "fail-closed"],
+      "note": "批准字段缺失：整份受管文档无效。",
+      "snapshot": {"registry": {"high_risk": ["W-A"]}, "runs": [{"work_id": "W-A", "engine": "engine-beta", "role": "code", "result": "ok"}],
+                   "exceptions": {"version": 1, "approvals": [{"approval_id": "EXC-W-A-1", "work_id": "W-A"}], "revoked": []}},
+      "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code",
+                  "exception_id": "EXC-W-A-1", "now": "2026-01-02T00:00:00+00:00"},
+      "expect": {"allowed": false, "codes": ["AUTHOR-EXCEPTION-FORMAT", "AUTHOR-LOCK-MISMATCH", "AUTHOR-LAUNCH-SECOND-FAMILY"]}
+    }
+  ],
+  "sequences": [
+    {
+      "id": "race-two-families-unlocked-high-risk",
+      "covers": ["serialization", "second-family", "writer-lock"],
+      "note": "两家抢同一个未锁的高风险任务（单进程串行版）：早检都通过；权威许可按锁内顺序只发一份，另一家拒绝。",
+      "snapshot": {"registry": {"high_risk": ["W-A"]}},
+      "steps": [
+        {"stage": "early", "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+         "expect": {"allowed": true, "codes": []}},
+        {"stage": "early", "request": {"engine": "engine-beta", "role": "code", "work_id": "W-A", "ack": "W-A:engine-beta:code"},
+         "expect": {"allowed": true, "codes": []}},
+        {"stage": "permit", "permit_id": "p-alpha", "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code", "run_id": "run-alpha", "model": "alpha-code"},
+         "expect": {"allowed": true, "codes": [], "permit": {"permit_id": "p-alpha", "run_id": "run-alpha", "family": "engine-alpha", "role": "code", "risk": "high",
+                    "authors_before": [], "lock_before": {"state": "none", "family": null}, "exception_id": null, "policy": "author-launch/v2",
+                    "linked_ids_sha256": "6f12c60c4403b9cf2c403f029ecf1c59d368855a046c8e2ba2ac3fb9b94a116e"}}},
+        {"stage": "permit", "permit_id": "p-beta", "request": {"engine": "engine-beta", "role": "code", "work_id": "W-A", "ack": "W-A:engine-beta:code", "run_id": "run-beta", "model": "beta-code"},
+         "expect": {"allowed": false, "codes": ["AUTHOR-LOCK-MISMATCH", "AUTHOR-LAUNCH-SECOND-FAMILY"], "permit": null}},
+        {"stage": "early", "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+         "expect": {"allowed": true, "codes": [], "authors_before": ["engine-alpha"], "lock_before": {"state": "locked", "family": "engine-alpha"}}}
+      ]
+    },
+    {
+      "id": "race-parent-and-child",
+      "covers": ["serialization", "linked-set", "second-family"],
+      "note": "两家分别启动同一关联集的父任务与子任务：同样只有先取得许可的一家放行。",
+      "snapshot": {"registry": {"high_risk": ["W-A"], "parents": {"W-A-CHILD": ["W-A"]}}},
+      "steps": [
+        {"stage": "permit", "permit_id": "p-child", "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A-CHILD", "ack": "W-A-CHILD:engine-alpha:code"},
+         "expect": {"allowed": true, "codes": [], "risk": "high",
+                    "permit": {"linked_ids_sha256": "84f6002951538b0217ca523fff29c4dbff8f6de30747fe6bbc893011b6f4fec3"}}},
+        {"stage": "permit", "permit_id": "p-parent", "request": {"engine": "engine-beta", "role": "code", "work_id": "W-A", "ack": "W-A:engine-beta:code"},
+         "expect": {"allowed": false, "codes": ["AUTHOR-LOCK-MISMATCH", "AUTHOR-LAUNCH-SECOND-FAMILY"], "linked_ids": ["W-A", "W-A-CHILD"], "permit": null}}
+      ]
+    },
+    {
+      "id": "failed-run-then-retry",
+      "covers": ["writer-lock", "second-family"],
+      "note": "首次运行失败后：异家重试拒绝，同家重试仍按其他条件判定。",
+      "snapshot": {"registry": {"high_risk": ["W-A"]}},
+      "steps": [
+        {"stage": "permit", "permit_id": "p-1", "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code", "run_id": "run-1"},
+         "expect": {"allowed": true, "codes": []}},
+        {"run": {"work_id": "W-A", "engine": "engine-alpha", "role": "code", "run_id": "run-1", "result": "failed"}},
+        {"stage": "early", "request": {"engine": "engine-beta", "role": "code", "work_id": "W-A", "ack": "W-A:engine-beta:code"},
+         "expect": {"allowed": false, "codes": ["AUTHOR-LOCK-MISMATCH", "AUTHOR-LAUNCH-SECOND-FAMILY"]}},
+        {"stage": "early", "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+         "expect": {"allowed": true, "codes": []}}
+      ]
+    },
+    {
+      "id": "void-only-on-never-started-evidence",
+      "covers": ["permit", "writer-lock"],
+      "note": "宿主有确定性证据证明命令行从未启动时追加 void，该许可不再计作者。",
+      "snapshot": {},
+      "steps": [
+        {"stage": "permit", "permit_id": "p-b", "request": {"engine": "engine-beta", "role": "code", "work_id": "W-A", "ack": "W-A:engine-beta:code"},
+         "expect": {"allowed": true, "codes": []}},
+        {"stage": "early", "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+         "expect": {"allowed": false, "codes": ["AUTHOR-LOCK-MISMATCH"]}},
+        {"void": {"permit_id": "p-b", "work_id": "W-A"}},
+        {"stage": "early", "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+         "expect": {"allowed": true, "codes": [], "authors_before": [], "lock_before": {"state": "none", "family": null}}}
+      ]
+    },
+    {
+      "id": "review-permit-is-not-an-author",
+      "covers": ["review", "permit", "writer-lock"],
+      "note": "复审许可不计作者、不改变写方锁。",
+      "snapshot": {},
+      "steps": [
+        {"stage": "permit", "permit_id": "p-write", "request": {"engine": "engine-beta", "role": "code", "work_id": "W-A", "ack": "W-A:engine-beta:code"},
+         "expect": {"allowed": true, "codes": []}},
+        {"stage": "permit", "permit_id": "p-review", "request": {"engine": "engine-alpha", "role": "review", "work_id": "W-A", "risk": "normal"},
+         "expect": {"allowed": true, "codes": [], "affects_lock": false, "permit": {"role": "review", "family": "engine-alpha"}}},
+        {"stage": "early", "request": {"engine": "engine-beta", "role": "code", "work_id": "W-A", "ack": "W-A:engine-beta:code"},
+         "expect": {"allowed": true, "codes": [], "authors_before": ["engine-beta"]}},
+        {"stage": "early", "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code"},
+         "expect": {"allowed": false, "codes": ["AUTHOR-LOCK-MISMATCH"]}}
+      ]
+    },
+    {
+      "id": "managed-exception-single-use",
+      "covers": ["exception", "second-family", "dual-existing", "review"],
+      "note": "受管例外：精确对应本次启动才可用，原子消费一次；用后关联集已双作者，非复审启动与模型复审都被拒。",
+      "snapshot": {
+        "registry": {"high_risk": ["W-A"]},
+        "runs": [{"work_id": "W-A", "engine": "engine-beta", "role": "code", "actual_engine_families": ["engine-beta"], "result": "ok"}],
+        "exceptions": {
+          "version": 1,
+          "approvals": [
+            {"approval_id": "EXC-W-A-1", "work_id": "W-A",
+             "linked_ids_sha256": "6f12c60c4403b9cf2c403f029ecf1c59d368855a046c8e2ba2ac3fb9b94a116e",
+             "existing_families": ["engine-beta"], "lock_family": "engine-beta", "new_family": "engine-alpha",
+             "role": "code", "purpose": "work", "input_sha256": "1426e80eb92603664e533fd1bc1af6a8e4008744fa5e3fb32ff0e36a76e5e54a",
+             "not_before": "2026-01-01T00:00:00+00:00", "expires_at": "2026-01-03T00:00:00+00:00", "max_uses": 1,
+             "approval_source": "fictitious approval record 1",
+             "approval_digest": "2acb8e3f20055baeaa372e34788246ad2aee4831aeabc1d047eb10ec0d5723db",
+             "verified_by": "fictitious maintainer",
+             "acknowledges": ["second_family_becomes_author", "dual_author_blocks_model_review"], "lock_exception": true},
+            {"approval_id": "EXC-W-A-EXPIRED", "work_id": "W-A",
+             "linked_ids_sha256": "6f12c60c4403b9cf2c403f029ecf1c59d368855a046c8e2ba2ac3fb9b94a116e",
+             "existing_families": ["engine-beta"], "lock_family": "engine-beta", "new_family": "engine-alpha",
+             "role": "code", "purpose": "work", "input_sha256": "1426e80eb92603664e533fd1bc1af6a8e4008744fa5e3fb32ff0e36a76e5e54a",
+             "not_before": "2025-12-01T00:00:00+00:00", "expires_at": "2025-12-02T00:00:00+00:00", "max_uses": 1,
+             "approval_source": "fictitious approval record 2",
+             "approval_digest": "2acb8e3f20055baeaa372e34788246ad2aee4831aeabc1d047eb10ec0d5723db",
+             "verified_by": "fictitious maintainer",
+             "acknowledges": ["second_family_becomes_author", "dual_author_blocks_model_review"], "lock_exception": true},
+            {"approval_id": "EXC-W-A-REVOKED", "work_id": "W-A",
+             "linked_ids_sha256": "6f12c60c4403b9cf2c403f029ecf1c59d368855a046c8e2ba2ac3fb9b94a116e",
+             "existing_families": ["engine-beta"], "lock_family": "engine-beta", "new_family": "engine-alpha",
+             "role": "code", "purpose": "work", "input_sha256": "1426e80eb92603664e533fd1bc1af6a8e4008744fa5e3fb32ff0e36a76e5e54a",
+             "not_before": "2026-01-01T00:00:00+00:00", "expires_at": "2026-01-03T00:00:00+00:00", "max_uses": 1,
+             "approval_source": "fictitious approval record 3",
+             "approval_digest": "2acb8e3f20055baeaa372e34788246ad2aee4831aeabc1d047eb10ec0d5723db",
+             "verified_by": "fictitious maintainer",
+             "acknowledges": ["second_family_becomes_author", "dual_author_blocks_model_review"], "lock_exception": true},
+            {"approval_id": "EXC-W-A-NOLOCK", "work_id": "W-A",
+             "linked_ids_sha256": "6f12c60c4403b9cf2c403f029ecf1c59d368855a046c8e2ba2ac3fb9b94a116e",
+             "existing_families": ["engine-beta"], "lock_family": "engine-beta", "new_family": "engine-alpha",
+             "role": "code", "purpose": "work", "input_sha256": "1426e80eb92603664e533fd1bc1af6a8e4008744fa5e3fb32ff0e36a76e5e54a",
+             "not_before": "2026-01-01T00:00:00+00:00", "expires_at": "2026-01-03T00:00:00+00:00", "max_uses": 1,
+             "approval_source": "fictitious approval record 4",
+             "approval_digest": "2acb8e3f20055baeaa372e34788246ad2aee4831aeabc1d047eb10ec0d5723db",
+             "verified_by": "fictitious maintainer",
+             "acknowledges": ["second_family_becomes_author", "dual_author_blocks_model_review"], "lock_exception": false},
+            {"approval_id": "EXC-W-A-SCOPE", "work_id": "W-A",
+             "linked_ids_sha256": "6f12c60c4403b9cf2c403f029ecf1c59d368855a046c8e2ba2ac3fb9b94a116e",
+             "existing_families": [], "lock_family": null, "new_family": "engine-alpha",
+             "role": "code", "purpose": "work", "input_sha256": "1426e80eb92603664e533fd1bc1af6a8e4008744fa5e3fb32ff0e36a76e5e54a",
+             "not_before": "2026-01-01T00:00:00+00:00", "expires_at": "2026-01-03T00:00:00+00:00", "max_uses": 1,
+             "approval_source": "fictitious approval record 5",
+             "approval_digest": "2acb8e3f20055baeaa372e34788246ad2aee4831aeabc1d047eb10ec0d5723db",
+             "verified_by": "fictitious maintainer",
+             "acknowledges": ["second_family_becomes_author", "dual_author_blocks_model_review"], "lock_exception": true},
+            {"approval_id": "EXC-W-A-PROBE", "work_id": "W-A",
+             "linked_ids_sha256": "6f12c60c4403b9cf2c403f029ecf1c59d368855a046c8e2ba2ac3fb9b94a116e",
+             "existing_families": ["engine-beta"], "lock_family": "engine-beta", "new_family": "engine-alpha",
+             "role": "code", "purpose": "work", "input_sha256": "36f45128177480843e59f165d756f23d8e8aeb221efb3d5e4ba8eaaf7d23480c",
+             "not_before": "2026-01-01T00:00:00+00:00", "expires_at": "2026-01-03T00:00:00+00:00", "max_uses": 1,
+             "approval_source": "fictitious approval record 6",
+             "approval_digest": "2acb8e3f20055baeaa372e34788246ad2aee4831aeabc1d047eb10ec0d5723db",
+             "verified_by": "fictitious maintainer",
+             "acknowledges": ["second_family_becomes_author", "dual_author_blocks_model_review"], "lock_exception": true}
+          ],
+          "revoked": ["EXC-W-A-REVOKED"]
+        }
+      },
+      "steps": [
+        {"stage": "early", "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code",
+                                       "exception_id": "EXC-W-A-1", "now": "2026-01-02T00:00:00+00:00"},
+         "expect": {"allowed": true, "codes": [], "exception_id": "EXC-W-A-1"}},
+        {"stage": "permit", "permit_id": "p-wrong-input", "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code",
+                                       "exception_id": "EXC-W-A-1", "now": "2026-01-02T00:00:00+00:00",
+                                       "input_sha256": "0000000000000000000000000000000000000000000000000000000000000000"},
+         "expect": {"allowed": false, "codes": ["AUTHOR-EXCEPTION-INPUT", "AUTHOR-LOCK-MISMATCH", "AUTHOR-LAUNCH-SECOND-FAMILY"], "permit": null}},
+        {"stage": "early", "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code",
+                                       "exception_id": "EXC-W-A-EXPIRED", "now": "2026-01-02T00:00:00+00:00"},
+         "expect": {"allowed": false, "codes": ["AUTHOR-EXCEPTION-EXPIRED", "AUTHOR-LOCK-MISMATCH", "AUTHOR-LAUNCH-SECOND-FAMILY"]}},
+        {"stage": "early", "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code",
+                                       "exception_id": "EXC-W-A-REVOKED", "now": "2026-01-02T00:00:00+00:00"},
+         "expect": {"allowed": false, "codes": ["AUTHOR-EXCEPTION-REVOKED", "AUTHOR-LOCK-MISMATCH", "AUTHOR-LAUNCH-SECOND-FAMILY"]}},
+        {"stage": "early", "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code",
+                                       "exception_id": "EXC-W-A-NOLOCK", "now": "2026-01-02T00:00:00+00:00"},
+         "expect": {"allowed": false, "codes": ["AUTHOR-LOCK-MISMATCH"], "missing_approval": "lock_exception"}},
+        {"stage": "early", "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code",
+                                       "exception_id": "EXC-W-A-SCOPE", "now": "2026-01-02T00:00:00+00:00"},
+         "expect": {"allowed": false, "codes": ["AUTHOR-EXCEPTION-SCOPE", "AUTHOR-LOCK-MISMATCH", "AUTHOR-LAUNCH-SECOND-FAMILY"]}},
+        {"stage": "early", "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code",
+                                       "exception_id": "EXC-W-A-PROBE", "now": "2026-01-02T00:00:00+00:00"},
+         "expect": {"allowed": false, "codes": ["AUTHOR-EXCEPTION-PROBE", "AUTHOR-LOCK-MISMATCH", "AUTHOR-LAUNCH-SECOND-FAMILY"]}},
+        {"stage": "early", "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code",
+                                       "exception_id": "EXC-W-A-404", "now": "2026-01-02T00:00:00+00:00"},
+         "expect": {"allowed": false, "codes": ["AUTHOR-EXCEPTION-NOT-FOUND", "AUTHOR-LOCK-MISMATCH", "AUTHOR-LAUNCH-SECOND-FAMILY"]}},
+        {"stage": "early", "request": {"engine": "engine-alpha", "role": "other", "work_id": "W-A", "ack": "W-A:engine-alpha:other",
+                                       "exception_id": "EXC-W-A-1", "now": "2026-01-02T00:00:00+00:00"},
+         "expect": {"allowed": false, "codes": ["AUTHOR-EXCEPTION-MISMATCH", "AUTHOR-LOCK-MISMATCH", "AUTHOR-LAUNCH-SECOND-FAMILY"]}},
+        {"stage": "early", "request": {"engine": "engine-alpha", "role": "other", "work_id": "W-A", "probe": true,
+                                       "exception_id": "EXC-W-A-1", "now": "2026-01-02T00:00:00+00:00"},
+         "expect": {"allowed": false, "codes": ["AUTHOR-EXCEPTION-PROBE"]}},
+        {"stage": "early", "request": {"engine": "engine-alpha", "role": "review", "work_id": "W-A", "risk": "high",
+                                       "exception_id": "EXC-W-A-1", "now": "2026-01-02T00:00:00+00:00"},
+         "expect": {"allowed": false, "codes": ["AUTHOR-EXCEPTION-MISMATCH"]}},
+        {"stage": "permit", "permit_id": "p-exception", "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code",
+                                       "exception_id": "EXC-W-A-1", "now": "2026-01-02T00:00:00+00:00",
+                                       "input_sha256": "1426e80eb92603664e533fd1bc1af6a8e4008744fa5e3fb32ff0e36a76e5e54a"},
+         "expect": {"allowed": true, "codes": [], "exception_id": "EXC-W-A-1",
+                    "permit": {"exception_id": "EXC-W-A-1", "family": "engine-alpha", "authors_before": ["engine-beta"],
+                               "lock_before": {"state": "locked", "family": "engine-beta"}}}},
+        {"stage": "permit", "permit_id": "p-reuse", "request": {"engine": "engine-alpha", "role": "code", "work_id": "W-A", "ack": "W-A:engine-alpha:code",
+                                       "exception_id": "EXC-W-A-1", "now": "2026-01-02T00:00:00+00:00",
+                                       "input_sha256": "1426e80eb92603664e533fd1bc1af6a8e4008744fa5e3fb32ff0e36a76e5e54a"},
+         "expect": {"allowed": false, "codes": ["AUTHOR-EXCEPTION-CONSUMED", "AUTHOR-LOCK-UNKNOWN", "AUTHOR-LAUNCH-DUAL-EXISTING"], "permit": null}},
+        {"stage": "early", "request": {"engine": "engine-beta", "role": "code", "work_id": "W-A", "ack": "W-A:engine-beta:code"},
+         "expect": {"allowed": false, "codes": ["AUTHOR-LOCK-UNKNOWN", "AUTHOR-LAUNCH-DUAL-EXISTING"]}},
+        {"stage": "early", "request": {"engine": "engine-beta", "role": "review", "work_id": "W-A", "risk": "high"},
+         "expect": {"allowed": false, "codes": ["AUTHOR-LAUNCH-DENIED"], "reason": "review-author"}},
+        {"stage": "early", "request": {"engine": "engine-alpha", "role": "review", "work_id": "W-A", "risk": "high"},
+         "expect": {"allowed": false, "codes": ["AUTHOR-LAUNCH-DENIED"], "reason": "review-author"}},
+        {"stage": "early", "request": {"engine": "engine-gamma", "role": "review", "work_id": "W-A", "risk": "high"},
+         "expect": {"allowed": false, "codes": ["AUTHOR-LAUNCH-DENIED"], "reason": "review-high-risk-family"}}
+      ]
+    }
+  ]
+}

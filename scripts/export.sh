@@ -26,9 +26,9 @@ public = ("docs/pr-watchdog.md", "scripts/pr-watch/schema.json",
           "roles/平台对接.md", "roles/审批.md", "roles/用量.md", "roles/配置管理.md",
           "process/README.md", "process/dispatch.md", "process/handoff.md", "process/review.md",
           "process/merge.md", "process/change-rules.md", "process/sync.md", "process/ticket-closure.md",
-          "routing/FORMAT.md", "routing/template.rules.json",
+          "routing/FORMAT.md", "routing/template.rules.json", "routing/AUTHOR-GATE.md",
           "examples/README.md", "examples/team.json", "examples/rules.json", "examples/projects.md",
-          "examples/CHANGELOG.md", "examples/private-words.txt",
+          "examples/CHANGELOG.md", "examples/private-words.txt", "examples/author-gate/vectors.json",
           "examples/profiles/巡检员.md", "examples/profiles/代码员.md", "examples/profiles/把关员.md",
           "examples/profiles/检索员.md", "examples/profiles/联络员.md", "examples/profiles/核准员.md",
           "examples/profiles/记账员.md", "examples/profiles/管理员.md",
@@ -37,7 +37,9 @@ public = ("docs/pr-watchdog.md", "scripts/pr-watch/schema.json",
           "tools/run-done-watcher/config.example.json", "tools/run-done-watcher/run-done-watcher",
           "tools/run-done-watcher/watcher.py", "tools/run-done-watcher/test_selftest.py",
           "tools/run-done-watcher/selftest.py", "tools/run-done-watcher/check-heartbeat.py",
-          "tools/run-done-watcher/reconcile.py", "tools/run-done-watcher/reconcile.config.example.json")
+          "tools/run-done-watcher/reconcile.py", "tools/run-done-watcher/reconcile.config.example.json",
+          "tools/author-gate-reference/README.md", "tools/author-gate-reference/author_gate.py",
+          "tools/author-gate-reference/test_author_gate.py")
 
 
 def members():
