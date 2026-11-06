@@ -72,14 +72,18 @@ def core_files():
              "examples/profiles/代码员.md", "examples/profiles/把关员.md",
              "scripts/check.sh", "scripts/check.py", "scripts/export.sh",
              "docs/pr-watchdog.md", "scripts/pr-watch/schema.json",
-             "examples/pr-watch/sample-events.jsonl", "examples/pr-watch/sample-reconcile-output.json"]
+             "examples/pr-watch/sample-events.jsonl", "examples/pr-watch/sample-reconcile-output.json",
+             "routing/AUTHOR-GATE.md", "examples/author-gate/vectors.json",
+             "tools/author-gate-reference/README.md", "tools/author-gate-reference/author_gate.py",
+             "tools/author-gate-reference/test_author_gate.py"]
     files += ["roles/" + role + ".md" for role in ROLES]
     files += ["process/" + process + ".md" for process in PROCESSES]
     files += ["tools/run-done-watcher/" + name for name in (
         "README.md", ".gitignore", "run-done-watcher", "check-heartbeat.py", "reconcile.py",
         "config.example.json", "reconcile.config.example.json", "watcher.py", "selftest.py", "test_selftest.py")]
     directories = ("roles", "routing", "process", "examples", "examples/profiles",
-                   "scripts", "tools/run-done-watcher", "docs", "scripts/pr-watch", "examples/pr-watch")
+                   "scripts", "tools/run-done-watcher", "docs", "scripts/pr-watch", "examples/pr-watch",
+                   "examples/author-gate", "tools/author-gate-reference")
     require(all((ROOT / path).is_file() for path in files)
             and all((ROOT / path).is_dir() for path in directories), "核心目录或文件缺失。")
     for name in ("check.sh", "export.sh"):
@@ -218,6 +222,18 @@ def skill():
     print("通过：技能入口 front matter 与全部本地引用有效。")
 
 
+def author_gate_vectors():
+    # Structure only; tools/author-gate-reference checks every expectation.
+    document = load_json(ROOT / "examples/author-gate/vectors.json")
+    require(isinstance(document, dict) and document.get("format") == "author-gate-vectors/1"
+            and isinstance(document.get("policy"), dict) and isinstance(document.get("vectors"), list)
+            and bool(document["vectors"]) and isinstance(document.get("sequences"), list),
+            "作者门禁向量格式无效。")
+    items = document["vectors"] + document["sequences"]
+    ids = [item.get("id") if isinstance(item, dict) else None for item in items]
+    require(all(nonempty(value) for value in ids) and len(ids) == len(set(ids)), "作者门禁向量编号缺失或重复。")
+
+
 def files_under(directory):
     for current, dirs, files in os.walk(directory, followlinks=False):
         for name in dirs + files:
@@ -300,6 +316,7 @@ def main():
     load_json(ROOT / "examples/pr-watch/sample-reconcile-output.json")
     for line in (ROOT / "examples/pr-watch/sample-events.jsonl").read_text(encoding="utf-8").splitlines():
         require(bool(line.strip()) and isinstance(parse_json(line), dict), "巡检事件示例无效。")
+    author_gate_vectors()
     privacy()
     print("自检全部通过：结构、JSON、技能入口及隐私检查完成。")
 
