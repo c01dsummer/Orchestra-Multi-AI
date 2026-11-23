@@ -28,7 +28,7 @@
 
 ## 幂等与熔断
 
-对每个 PR、提交和轮次记录 `<repo>#<pr_number>:<head_sha>:round-<n>`；同一个提交只触发一次，重扫不得重复派发。自动修复最多按每个 PR 累计 2 轮，计数不清零；达到上限后仍失败，或发生冲突，停止派发并升级人工审核，禁止无限自激循环。并发执行前持有独立锁，状态持久化并记录实际动作；候选不等于已执行。不要以状态文件替代锁。缺少仓库名时，输出的 `repo` 为 `null`，幂等键回退为 `<pr_number>:<head_sha>:round-<n>`，事件标识、看护列表条目及状态文件中 `prs` 的键均使用不带仓库前缀的编号格式。例如编号为 12、提交为 `abc123`、轮次为 1 时，幂等键为 `12:abc123:round-1`，看护列表及状态键为 `12`，事件可为 `PR#12:head=abc123:reviews:1`。回退键仅适用于单仓巡检；有仓库名时状态键为 `<repo>#<number>`，无仓库名时为 `<number>`。同一对账实例不得混用有 `repo` 与无 `repo` 格式。若本轮输入中同时出现带 `repo` 与不带 `repo` 的条目，或本轮输入与状态库已有水位线键的 `repo` 前缀形态不一致，或监控多个仓库时缺少非空 `repo`，本轮巡检顶层 `status` 判为 `unknown`，回滚本轮全部水位线预留，并将所有非熔断升级条目的 `action` 置为 `blocked_unknown`。已因冲突或轮次耗尽触发的 `circuit_breaker_escalate` 与 `circuit_broken: true` 告警须保留。恢复时需统一输入 `repo` 形态并迁移或清理旧形态水位线键。`blocked_unknown` 输出 `action: "blocked_unknown"`、`requires_watch: true`、`round: null`、`idempotency_key: null`。无论条目的 `action` 为何（包括 `blocked_unknown` 和保留的 `circuit_breaker_escalate`），输入 `repo` 非法时，输出条目的 `repo` 一律置为 `null`，并在 `reasons` 中记录 `unknown repo`。干跑以 `dry_run_preview` 表示不可派发的候选，round 和幂等键为 null，且不写状态。
+对每个 PR、提交和轮次记录 `<repo>#<pr_number>:<head_sha>:round-<n>`；同一个提交只触发一次，重扫不得重复派发。自动修复最多按每个 PR 累计 2 轮，计数不清零；可信快照确认新 head 失败且已达轮次上限，或确认发生合并冲突时，停止派发并升级人工审核。并发执行前持有独立锁，状态持久化并记录实际动作；候选不等于已执行。不要以状态文件替代锁。缺少仓库名时，输出的 `repo` 为 `null`，幂等键回退为 `<pr_number>:<head_sha>:round-<n>`，事件标识、看护列表条目及状态文件中 `prs` 的键均使用不带仓库前缀的编号格式。例如编号为 12、提交为 `abc123`、轮次为 1 时，幂等键为 `12:abc123:round-1`，看护列表及状态键为 `12`，事件可为 `PR#12:head=abc123:reviews:1`。回退键仅适用于单仓巡检；有仓库名时状态键为 `<repo>#<number>`，无仓库名时为 `<number>`。同一对账实例不得混用有 `repo` 与无 `repo` 格式。若本轮输入中同时出现带 `repo` 与不带 `repo` 的条目，或本轮输入与状态库已有水位线键的 `repo` 前缀形态不一致，或监控多个仓库时缺少非空 `repo`，本轮巡检顶层 `status` 判为 `unknown`，回滚本轮全部水位线预留，并将所有非熔断升级条目的 `action` 置为 `blocked_unknown`。有独立证据的 `circuit_breaker_escalate` 与 `circuit_broken: true` 告警须保留。重复 PR 键的处理见下文。恢复时需统一输入 `repo` 形态并迁移或清理旧形态水位线键。`blocked_unknown` 输出 `action: "blocked_unknown"`、`requires_watch: true`、`round: null`、`idempotency_key: null`。无论条目的 `action` 为何（包括 `blocked_unknown` 和保留的 `circuit_breaker_escalate`），输入 `repo` 非法时，输出条目的 `repo` 一律置为 `null`，并在 `reasons` 中记录 `unknown repo`。干跑以 `dry_run_preview` 表示不可派发的候选，round 和幂等键为 null，且不写状态。
 
 ## 委托治理边界
 
@@ -62,7 +62,7 @@ GitHub 采集方应填入被审提交的完整 commit OID。若强推后原提�
 
 以下情况属于对账完整性 `unknown`：数据结构或标识符契约违例（包括缺失或无效的事件 `id`、缺失或非字符串的 `body`、无效的 PR `head_sha`，或非 `null` 且不匹配 `^[!-~]+$`（或含换行）的 `repo`）、分页未取完等不完整信号、参与判定的已提交事件时间戳缺失、无效或乱序、未知活动进程或读取失败。总体决议为 `CHANGES_REQUESTED` 或 `REQUEST_CHANGES` 时评审作者无效，或单条 `CHANGES_REQUESTED` 评审的作者无效，均判为 `unknown`；非变更请求下评审作者无效仅视为不可信，不判 `unknown`。
 
-同一 PR 键重复属于对账完整性 `unknown`。该键已有输出条目时，标记为 `blocked_unknown`，并设置 `circuit_broken: false`。对账完整性 `unknown` 使本轮巡检顶层 `status` 置为 `unknown`，回滚本轮全部水位线预留，阻止自动派发。其他 PR 独立确认的 `circuit_breaker_escalate` 与 `circuit_broken: true` 人工升级告警继续保留，其余输出条目标记为 `blocked_unknown`。
+同一 PR 键重复属于对账完整性 `unknown`。该键已有输出条目时，标记为 `blocked_unknown`，并设置 `circuit_broken: false`。已使用的修复轮次和已记录的 head 均保留。当后续唯一、完整的快照确认新 head 失败时，沿用原轮次上限判定是否熔断。对账完整性 `unknown` 使本轮巡检顶层 `status` 置为 `unknown`，回滚本轮全部水位线预留，阻止自动派发。其他 PR 独立确认的 `circuit_breaker_escalate` 与 `circuit_broken: true` 人工升级告警继续保留，其余输出条目标记为 `blocked_unknown`。
 
 ## 输出契约
 
