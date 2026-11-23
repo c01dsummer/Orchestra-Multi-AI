@@ -26,19 +26,22 @@ Orchestra-Multi-AI/
 ├─ process/                    # 派工、交接、复审、合并、改规矩、同步、关单
 ├─ routing/
 │  ├─ FORMAT.md                # 规则表格式版本 1
-│  └─ template.rules.json      # 含占位符的空白模板
+│  ├─ template.rules.json      # 含占位符的空白模板
+│  └─ AUTHOR-GATE.md           # 可选：包装程序的作者启动门禁契约
 ├─ examples/                   # 虚构配置，对应本地 config/
 │  ├─ team.json
 │  ├─ rules.json
 │  ├─ projects.md
 │  ├─ CHANGELOG.md             # 配置内容版本
 │  ├─ private-words.txt
+│  ├─ author-gate/             # 门禁契约的虚构测试向量
 │  └─ profiles/                # 8 名虚构成员的完整设定示例
 ├─ scripts/
 │  ├─ check.sh                 # 本地检查入口
 │  ├─ check.py                 # 严格校验实现，仅用标准库
 │  └─ export.sh                # 公开部分导出
 ├─ tools/run-done-watcher/     # 通知、心跳、对账和离线测试
+├─ tools/author-gate-reference/ # 门禁参考判定与离线测试，不是执行器
 └─ .github/workflows/          # CI 格式与隐私检查、离线测试
 ```
 
