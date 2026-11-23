@@ -710,7 +710,8 @@ class WatcherTest(unittest.TestCase):
 
     def test_46_ack_does_not_hide_pending(self):
         self.append(event("failed"))
-        self.server.responses = [401]
+        # A retry may become due between the two invocations. Keep its delivery failing.
+        self.server.responses = [401, 401]
         self.run_once("--allow-history", expected=2)
         self.run_once("--ack-anomalies", expected=2)
         self.assertEqual(self.heartbeat()["health"], "需检查")
