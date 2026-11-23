@@ -193,6 +193,7 @@ export async function collectPullRequest(adapter, { grant, ref, signal, timeoutM
   requested = Object.freeze({ repo: ref.repo, repositoryId: ref.repositoryId, number: ref.number, head: ref.head });
   if (!Array.isArray(adapter.capabilities) || !adapter.capabilities.includes(READ_PULL_REQUEST)
       || typeof adapter.readPage !== 'function') return result('UNKNOWN', 'CAPABILITY_UNKNOWN');
+  const platform = grant.platform;
   if (![[timeoutMs, 60_000], [maxBytes, 1024 * 1024], [maxPages, 32]]
       .every(([value, limit]) => Number.isInteger(value) && value > 0 && value <= limit)) {
     throw new RangeError('Invalid platform observation limits');
@@ -215,9 +216,16 @@ export async function collectPullRequest(adapter, { grant, ref, signal, timeoutM
       if (reference) {
         requireFact(JSON.stringify(reference) === JSON.stringify(page.reference)
           && JSON.stringify(snapshot) === JSON.stringify(page.snapshot), 'SNAPSHOT_CHANGED');
+      } else {
+        const observed = page.reference;
+        const candidate = page.snapshot;
+        requireFact(observed?.platform === platform && observed.repo === requested.repo
+          && observed.repositoryId === requested.repositoryId && observed.number === requested.number
+          && candidate?.repo === requested.repo && candidate.number === requested.number, 'UNKNOWN_SOURCE');
+        requireFact(observed.head === requested.head && candidate.head_sha === requested.head, 'STALE_HEAD');
+        reference = { ...observed };
+        snapshot = { ...candidate };
       }
-      reference = page.reference;
-      snapshot = page.snapshot;
       for (const field of fields.filter(name => cursors[name] !== undefined)) addPage(history[field], page.pages[field]);
       if (fields.every(field => history[field].next === undefined)) {
         for (const [field, records] of Object.entries(pages())) {

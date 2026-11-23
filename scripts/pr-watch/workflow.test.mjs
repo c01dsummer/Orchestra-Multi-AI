@@ -159,9 +159,30 @@ test('durable review history survives reordering, adapter upgrades and new revis
   assert.deepEqual(revised.newReviews.map(event => [event.id, event.revision, event.state]), [['event-2', 'r2', 'dismissed']]);
   assert.equal(persisted[1].state, 'approved');
   const history = [...persisted, ...revised.newReviews];
-  assert.deepEqual((await fixture.observe({ seenReviews: history })).newReviews, []);
+  const combined = await fixture.observe({ seenReviews: history });
+  assert.equal(combined.external.status, 'COMPLETE');
+  assert.deepEqual(combined.newReviews, []);
   fixture.rows[1].state = 'approved';
   assert.equal((await fixture.observe({ seenReviews: history })).external.reason, 'CONFLICTING_REVIEW');
+});
+
+test('workflow retains the validated facts across later provider reads', async () => {
+  const fixture = scenario();
+  const readChange = fixture.adapters.change.read;
+  const readReview = fixture.adapters.review.read;
+  fixture.adapters.change.read = args => {
+    Object.assign(fixture.data.task, { owner: 'different-owner', state: 'Closed' });
+    return readChange(args);
+  };
+  fixture.adapters.review.read = args => {
+    Object.assign(fixture.data.change.checks[0], { head: old, state: 'failure' });
+    return readReview(args);
+  };
+  const result = await fixture.observe();
+  assert.equal(result.external.status, 'COMPLETE');
+  assert.equal(result.facts.task.owner, 'owner');
+  assert.equal(result.facts.task.platformState, 'Doing');
+  assert.deepEqual(result.facts.change.checks, [{ id: 'check-1', head, state: 'success' }]);
 });
 
 test('a snapshot cannot silently combine competing revisions of the same review', async () => {

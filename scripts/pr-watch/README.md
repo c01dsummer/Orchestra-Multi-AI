@@ -24,8 +24,8 @@
 | 发送 | Node `http`/`https` 原生 HTTP/1.1，每页新连接，一次固定 `query` POST。记录请求 `finish` 时相对单调时钟的 `requestFlushedMs`。该事实表示客户端完成交付给本地传输层，测试另由上游服务记录收到的请求。空值表示客户端未观察到完整交付。 |
 | 首个响应 | 记录首个 HTTP 状态和相对时刻（含 1xx），另记最终状态和观测到的体字节数。HTTPS 代理 CONNECT 与 GraphQL HTTP 响应分别观察。 |
 | 重试与重定向 | 客户端为零重试、零跳转。421、3xx、限流和断连结束当前观察，保留已有事实。既有调度退避由原消费者控制。 |
-| 代理与 CA | 默认 HTTPS 使用环境中的 `HTTPS_PROXY`/`https_proxy` 与 `NO_PROXY`/`no_proxy`。显式 `proxy: 'direct'` 使用直连。TLS 校验始终开启，默认沿用 Node CA。部署方可额外提供 CA 内容。合成 HTTP 只支持回环直连。 |
-| 期限、取消 | 默认 10 秒共用单调时限，覆盖分页、连接、响应和最终投影。可配置到 60 秒。外部取消销毁请求，保留先前观察，随后无自动发送。上游是否停止处理需由外部证据确认。 |
+| 代理与 CA | HTTPS 支持环境中的 `HTTPS_PROXY`/`https_proxy` 与 `NO_PROXY`/`no_proxy`，小写优先。显式 `proxy: 'direct'` 使用直连。代理认证要求 HTTPS 代理，明文代理只支持无认证连接。选中的配置无效时返回 `UNKNOWN / PROXY_CONFIGURATION`。TLS 默认沿用 Node CA，部署方可为目标额外提供 CA。合成 HTTP 只支持回环直连。 |
+| 期限、取消 | 默认 10 秒共用单调时限，覆盖分页、连接、代理握手、响应和最终投影。可配置到 60 秒。外部取消销毁正在建立的代理连接或活动请求，保留先前观察，随后无自动发送。上游是否停止处理需由外部证据确认。 |
 | 大小和解码 | 响应头最多 16 KiB，体每页最多 1 MiB（可下调）。同时检查 Content-Length 和流式长度。仅接受 identity 与严格 UTF-8 JSON。部分响应和超限返回 `UNKNOWN`。 |
 
 回执中的 `sourceKind` 标记来源配置或合成测试。生产网络中代理的额外请求次数需独立观测。公开测试日志只含合成数据的计数、状态和时长。私有 `readerInput` 可能包含评论和评审正文，沿现行权限保存。
@@ -38,7 +38,7 @@
 node --test scripts/pr-watch/platform.test.mjs
 ```
 
-组合用例通过显式路径接入同一版本的 Reader 与测试夹具。`PR_WATCH_READER_ROOT` 和 `PR_WATCH_READER_HARNESS` 分别指向夹具数据根和 Python 夹具入口。`PR_WATCH_READER_BINARY` 指向夹具调用的 Reader，用于校验回执中的摘要。
+组合用例通过显式路径接入同一版本的 Reader 与测试夹具。`PR_WATCH_READER_ROOT` 指向夹具所在的配置快照根，`PR_WATCH_READER_HARNESS` 指向该快照中的 Python 夹具入口。`PR_WATCH_READER_BINARY` 指向夹具调用的 Reader，用于校验回执中的摘要。
 
 ```sh
 PR_WATCH_READER_ROOT=/path/to/fixture-root \

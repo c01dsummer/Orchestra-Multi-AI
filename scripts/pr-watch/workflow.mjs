@@ -147,12 +147,16 @@ export function createPlatformObserver({ bindings, adapters, sourceKind, workId,
       const task = await read('task');
       const taskState = statusMap.get(task?.state);
       requireFact(taskState && key(task.owner) && key(task.project) && (task.parent === null || key(task.parent)), 'UNKNOWN_TASK_STATE');
+      const taskFact = { ref: registry.task.ref, state: taskState, platformState: task.state,
+        owner: task.owner, project: task.project, parent: task.parent };
       const change = await read('change');
       requireFact(change?.repositoryId === repositoryId, 'UNKNOWN_REPOSITORY');
       requireFact(change.head === head, 'STALE_HEAD');
       requireFact(Array.isArray(change.checks) && change.checks.every(check => key(check?.id)
         && check.head === head && checkStates.has(check.state)), 'UNKNOWN_CHECKS');
       requireFact(new Set(change.checks.map(c => c.id)).size === change.checks.length, 'CONFLICTING_CHECK');
+      const changeFact = { source: registry.change.source, ref: registry.change.ref, repositoryId, head,
+        checks: change.checks.map(({ id, head, state }) => ({ id, head, state })) };
 
       const prior = new Map();
       for (const event of reviewHistory) {
@@ -193,10 +197,8 @@ export function createPlatformObserver({ bindings, adapters, sourceKind, workId,
         if (page.next === null) {
           requireFact(reviews.size === total, 'INCOMPLETE_REVIEW_PAGES');
           return result('COMPLETE', null, {
-            task: { ref: registry.task.ref, state: taskState, platformState: task.state, owner: task.owner,
-              project: task.project, parent: task.parent },
-            change: { source: registry.change.source, ref: registry.change.ref, repositoryId: change.repositoryId, head,
-              checks: change.checks.map(({ id, head, state }) => ({ id, head, state })) },
+            task: taskFact,
+            change: changeFact,
             reviews: [...reviews.values()].map(event => ({ ...event, atCurrentHead: event.head === head,
               trustedReviewer: reviewers.has(event.reviewer) })),
           });

@@ -9,6 +9,7 @@ import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { getCACertificates, setDefaultCACertificates } from 'node:tls';
 import { collectPullRequest, githubPullRequests, loopbackPullRequests, READ_PULL_REQUEST } from './platform.mjs';
 import { createPlatformObserver, readerInputFor } from './workflow.mjs';
 
@@ -95,6 +96,33 @@ function sent(t, result, server, statuses) {
 const second = { ...comment, id: 'second-node', url: `${url}#issuecomment-3456789013`, createdAt: '2026-01-01T00:00:02Z' };
 const firstPage = payload({ comments: page([comment], 2, 'next-comments') });
 const lastPage = payload({ comments: page([comment, second], 2) });
+
+test('the collector binds the first adapter page to the grant', async () => {
+  const reference = { ...ref, platform: 'github', platformId: 'pr-node', url };
+  const snapshot = { repo: ref.repo, number: ref.number, head_sha: head };
+  const pages = {
+    comments: { records: [], total: 0 },
+    reviews: { records: [], total: 0 },
+  };
+  const adapter = {
+    platform: 'github', sourceKind: 'synthetic', capabilities: [READ_PULL_REQUEST],
+    readPage: () => ({ reference, snapshot, pages }),
+  };
+  assert.equal((await collect(adapter)).external.status, 'COMPLETE');
+  for (const [field, value, reason] of [
+    ['platform', 'wrong', 'UNKNOWN_SOURCE'],
+    ['repositoryId', 'wrong', 'UNKNOWN_SOURCE'],
+    ['number', 8, 'UNKNOWN_SOURCE'],
+    ['head', oldHead, 'STALE_HEAD'],
+  ]) {
+    adapter.readPage = () => ({ reference: { ...reference, [field]: value }, snapshot, pages });
+    unknown(await collect(adapter), reason, 0);
+  }
+  adapter.readPage = () => ({ reference, snapshot: { ...snapshot, repo: 'other/project' }, pages });
+  unknown(await collect(adapter), 'UNKNOWN_SOURCE', 0);
+  adapter.readPage = () => ({ reference, snapshot: { ...snapshot, head_sha: oldHead }, pages });
+  unknown(await collect(adapter), 'STALE_HEAD', 0);
+});
 
 test('complete pages preserve large legacy IDs and exact replay, with independent cursors and fresh sockets', async t => {
   const server = await upstream(t, [response => {
@@ -242,6 +270,30 @@ function localCertificate(t) {
   return { key: readFileSync(key), cert: readFileSync(cert) };
 }
 
+function setProxy(t, url) {
+  for (const name of ['HTTPS_PROXY', 'https_proxy', 'NO_PROXY', 'no_proxy']) {
+    const original = process.env[name];
+    t.after(() => { if (original === undefined) delete process.env[name]; else process.env[name] = original; });
+    delete process.env[name];
+  }
+  process.env.HTTPS_PROXY = url;
+}
+
+function tunnelTo(proxy, origin, observeRequest) {
+  const target = new URL(origin);
+  proxy.on('connect', (request, client, pending) => {
+    observeRequest(request);
+    assert.equal(request.url, target.host);
+    const socket = net.connect(Number(target.port), target.hostname, () => {
+      client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+      socket.write(pending);
+      client.pipe(socket).pipe(client);
+    });
+    client.on('close', () => socket.destroy());
+    socket.on('error', () => client.destroy());
+  });
+}
+
 test('TLS uses configured CA and explicit environment proxy, including NO_PROXY', async t => {
   const tls = localCertificate(t);
   const server = await upstream(t, [respond(payload()), response => response.writeHead(421).end(),
@@ -252,25 +304,9 @@ test('TLS uses configured CA and explicit environment proxy, including NO_PROXY'
   assert.equal(server.requests.length, 0);
   const tunnels = [];
   const proxy = http.createServer();
-  proxy.on('connect', (request, client, pending) => {
-    tunnels.push(request.url);
-    const target = new URL(server.origin);
-    assert.equal(request.url, target.host);
-    const upstream = net.connect(Number(target.port), target.hostname, () => {
-      client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-      upstream.write(pending);
-      client.pipe(upstream).pipe(client);
-    });
-    client.on('close', () => upstream.destroy());
-    upstream.on('error', () => client.destroy());
-  });
+  tunnelTo(proxy, server.origin, request => tunnels.push(request.url));
   const proxyAddress = await serve(proxy, t);
-  for (const name of ['HTTPS_PROXY', 'https_proxy', 'NO_PROXY', 'no_proxy']) {
-    const original = process.env[name];
-    t.after(() => { if (original === undefined) delete process.env[name]; else process.env[name] = original; });
-    delete process.env[name];
-  }
-  process.env.HTTPS_PROXY = `http://${proxyAddress}`;
+  setProxy(t, `http://${proxyAddress}`);
   const adapter = loopbackPullRequests(server.origin, { proxy: 'environment', ca: tls.cert });
   const throughProxy = await collect(adapter);
   assert.equal(throughProxy.external.status, 'COMPLETE');
@@ -285,6 +321,67 @@ test('TLS uses configured CA and explicit environment proxy, including NO_PROXY'
   assert.equal(bypass.external.status, 'COMPLETE');
   assert.equal(server.requests.length, 3);
   assert.equal(tunnels.length, 2);
+});
+
+test('proxy authentication requires TLS on the selected proxy', async t => {
+  const tls = localCertificate(t);
+  const server = await upstream(t, [respond(payload())], { tls });
+  const proxy = http.createServer();
+  let connections = 0;
+  proxy.on('connection', () => { connections++; });
+  setProxy(t, `http://fixture:dummy@${await serve(proxy, t)}`);
+  const adapter = loopbackPullRequests(server.origin, { proxy: 'environment', ca: tls.cert });
+  const refused = await collect(adapter);
+  unknown(refused, 'PROXY_CONFIGURATION', 1);
+  assert.equal(refused.external.attempts[0].requestFlushedMs, null);
+  assert.equal(server.requests.length, 0);
+  process.env.no_proxy = new URL(server.origin).host;
+  assert.equal((await collect(adapter)).external.status, 'COMPLETE');
+  assert.equal(connections, 0);
+  assert.equal(server.requests.length, 1);
+});
+
+test('an authenticated HTTPS proxy establishes a verified tunnel', async t => {
+  const targetTls = localCertificate(t);
+  const proxyTls = localCertificate(t);
+  const server = await upstream(t, [respond(payload())], { tls: targetTls });
+  const defaults = getCACertificates('default');
+  t.after(() => setDefaultCACertificates(defaults));
+  const proxy = https.createServer(proxyTls);
+  const requests = [];
+  tunnelTo(proxy, server.origin, request => requests.push(request.headers));
+  setProxy(t, `https://fixture:dummy@${await serve(proxy, t)}`);
+  const adapter = loopbackPullRequests(server.origin, { proxy: 'environment', ca: targetTls.cert });
+  unknown(await collect(adapter), 'TRANSPORT_ERROR', 1);
+  assert.equal(requests.length, 0);
+  setDefaultCACertificates([...defaults, proxyTls.cert.toString()]);
+  assert.equal((await collect(adapter)).external.status, 'COMPLETE');
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0]['proxy-authorization'], 'Basic ' + Buffer.from('fixture:dummy').toString('base64'));
+  assert.equal(requests[0].authorization, undefined);
+  assert.equal(server.requests.length, 1);
+});
+
+test('deadline and cancellation close a pending proxy tunnel', { timeout: 5000 }, async t => {
+  const proxy = http.createServer();
+  setProxy(t, `http://${await serve(proxy, t)}`);
+  const adapter = loopbackPullRequests('https://127.0.0.1:1', { proxy: 'environment' });
+  for (const reason of ['CANCELLED', 'TIMEOUT']) {
+    const abort = new AbortController();
+    const pending = once(proxy, 'connect');
+    const result = collect(adapter, { signal: abort.signal, timeoutMs: reason === 'TIMEOUT' ? 400 : 2000 });
+    const [, socket] = await pending;
+    const closed = once(socket, 'close');
+    // This detached server socket owns the write side of the connection.
+    socket.once('end', () => socket.end());
+    socket.resume();
+    if (reason === 'CANCELLED') abort.abort();
+    const observation = await result;
+    unknown(observation, reason, 1);
+    assert.equal(observation.external.attempts[0].requestFlushedMs, null);
+    assert.equal(observation.external.attempts[0].firstResponse, null);
+    await closed;
+  }
 });
 
 const scope = process.env.PR_WATCH_READER_ROOT;
