@@ -10,9 +10,10 @@
 
 ## 状态文件初始化
 
-巡检状态、已汇报运行列表、运行归属表、事件水位线和锁快照按代理分开保存，文件名带代理标识（去掉空格），不同代理不得共用。已上线代理的状态文件不得随意改名；确需改名时须原样迁移内容，否则修复轮次计数会被清零。
+巡检状态、已汇报运行列表、运行归属表、事件水位线和锁快照按稳定的代理标识分开保存。由代理标识生成文件名时，读写两端和外部实现须用同一无损编码，例如将 UTF-8 字节逐字节转为两位小写十六进制。这样 `a b` 和 `ab` 会得到不同的文件名。部署方也可以在映射中为每个稳定标识显式指定唯一文件名。确需移动已上线的状态文件时，按批准的迁移顺序保全原身份、内容、锁和累计轮次，再切换读写路径。
 
 - 巡检状态 JSON：首次可以不存在，视为从零开始；预先创建时只能写 `{"consecutive_idle_windows": 0, "prs": {}}`，`prs` 的每个值为 `{"round_count": <非负整数>, "heads": [<字符串>...]}`。空文件或其他结构属于读取失败，判为 `unknown`，且不得写回。
+- 运行后持久状态：输出 schema 要求同时记录 `consecutive_idle_windows`、`prs` 和 `reported_pr_events`。部署映射另设纯标识水位线文件时，续跑须按原配置提供该文件，并用它核对 JSON 中的已汇报事件。
 - 已汇报运行列表与事件水位线：须预先存在，可为空。每行只写一个运行标识或事件标识，不带制表符、时间戳等额外列；否则整行比较无法匹配，已汇报的运行或事件会反复出现。
 - 运行归属表：须预先存在，可为空。无表头时每行为 `<run_id>` 或 `<run_id><制表符><代理名称>`，第二列与运行记录的代理字段完全一致，不加会话前缀等修饰；有表头时首行含 `run_id` 列，可选 `agent` 列，每行列数与表头一致。
 - 锁快照：无锁时写空数组 `[]`。
@@ -27,11 +28,13 @@
 
 ## 幂等与熔断
 
-对每个 PR、提交和轮次记录 `<repo>#<pr_number>:<head_sha>:round-<n>`；同一个提交只触发一次，重扫不得重复派发。自动修复最多按每个 PR 累计 2 轮，计数不清零；达到上限后仍失败，或发生冲突，停止派发并升级人工审核，禁止无限自激循环。并发执行前持有独立锁，状态持久化并记录实际动作；候选不等于已执行。不要以状态文件替代锁。缺少仓库名时，输出的 `repo` 为 `null`，幂等键回退为 `<pr_number>:<head_sha>:round-<n>`，事件标识、看护列表条目及状态文件中 `prs` 的键均使用不带仓库前缀的编号格式。例如编号为 12、提交为 `abc123`、轮次为 1 时，幂等键为 `12:abc123:round-1`，看护列表及状态键为 `12`，事件可为 `PR#12:head=abc123:reviews:1`。回退键仅适用于单仓巡检；有仓库名时状态键为 `<repo>#<number>`，无仓库名时为 `<number>`。同一对账实例不得混用有 `repo` 与无 `repo` 格式。若本轮输入中同时出现带 `repo` 与不带 `repo` 的条目，或本轮输入与状态库已有水位线键的 `repo` 前缀形态不一致，或监控多个仓库时缺少非空 `repo`，本轮巡检顶层 `status` 判为 `unknown`，回滚本轮全部水位线预留，并将所有非熔断升级条目的 `action` 置为 `blocked_unknown`。已因冲突或轮次耗尽触发的 `circuit_breaker_escalate` 与 `circuit_broken: true` 告警须保留。恢复时需统一输入 `repo` 形态并迁移或清理旧形态水位线键。`blocked_unknown` 输出 `action: "blocked_unknown"`、`requires_watch: true`、`round: null`、`idempotency_key: null`。无论条目的 `action` 为何（包括 `blocked_unknown` 和保留的 `circuit_breaker_escalate`），输入 `repo` 非法时，输出条目的 `repo` 一律置为 `null`，并在 `reasons` 中记录 `unknown repo`。干跑以 `dry_run_preview` 表示不可派发的候选，round 和幂等键为 null，且不写状态。
+对每个 PR、提交和轮次记录 `<repo>#<pr_number>:<head_sha>:round-<n>`；同一个提交只触发一次，重扫不得重复派发。自动修复最多按每个 PR 累计 2 轮，计数不清零；可信快照确认新 head 失败且已达轮次上限，或确认发生合并冲突时，停止派发并升级人工审核。并发执行前持有独立锁，状态持久化并记录实际动作；候选不等于已执行。不要以状态文件替代锁。缺少仓库名时，输出的 `repo` 为 `null`，幂等键回退为 `<pr_number>:<head_sha>:round-<n>`，事件标识、看护列表条目及状态文件中 `prs` 的键均使用不带仓库前缀的编号格式。例如编号为 12、提交为 `abc123`、轮次为 1 时，幂等键为 `12:abc123:round-1`，看护列表及状态键为 `12`，事件可为 `PR#12:head=abc123:reviews:1`。回退键仅适用于单仓巡检；有仓库名时状态键为 `<repo>#<number>`，无仓库名时为 `<number>`。同一对账实例不得混用有 `repo` 与无 `repo` 格式。若本轮输入中同时出现带 `repo` 与不带 `repo` 的条目，或本轮输入与状态库已有水位线键的 `repo` 前缀形态不一致，或监控多个仓库时缺少非空 `repo`，本轮巡检顶层 `status` 判为 `unknown`，回滚本轮全部水位线预留，并将所有非熔断升级条目的 `action` 置为 `blocked_unknown`。有独立证据的 `circuit_breaker_escalate` 与 `circuit_broken: true` 告警须保留。重复 PR 键的处理见下文。切换仓库键格式前，先核实每个 PR 对应的仓库。同步迁移输入格式、状态文件中的 `prs` 键及其值、`reported_pr_events` 和另存的事件水位线。保留每个 PR 的 `round_count` 与 `heads`，并核对已确认事件及无键冲突后，再用新格式续跑。`blocked_unknown` 输出 `action: "blocked_unknown"`、`requires_watch: true`、`round: null`、`idempotency_key: null`。无论条目的 `action` 为何（包括 `blocked_unknown` 和保留的 `circuit_breaker_escalate`），输入 `repo` 非法时，输出条目的 `repo` 一律置为 `null`，并在 `reasons` 中记录 `unknown repo`。干跑以 `dry_run_preview` 表示不可派发的候选，round 和幂等键为 null，且不写状态。
 
 ## 委托治理边界
 
 自动巡检只负责对账、提醒与受控派发；不替代跨家复审，也不自行批准或合并。维护者决定处理、恢复和最终合流，权限应按读取与写入分离。
+
+[完成通知对账](../tools/run-done-watcher/README.md) 的 `reconcile.py` 从运行账本和通知日志核对运行完成与投递。自备 PR 巡检器负责 PR 快照、评审和提交判断、PR 事件水位线及修复候选。合流确认仍走 PR 巡检及维护者流程。
 
 对账输出 `action: "observe"` 只表示无需自动派发修复，不表示可以静默记账。已就绪（非草稿）的 open PR 检查完成且为 `SUCCESS`、评审通过，或审查完成且无阻塞项（无问题，或只有非阻塞建议）时，条目输出 `observe`，对应的状态事件及评论、评审事件仍列在该条目和顶层的 `unhandled_events` 中。只要这类条目的 `unhandled_events` 非空，即属于等待维护者最终合流审批的准入节点：巡检必须先唤醒并向维护者汇报，附合流确认请求，有非阻塞建议时一并请维护者决定是否处理；汇报完成后，才将这些事件写入已汇报水位线。汇报失败时不写水位线，下一窗口重试。不得因无需自动派发修复就静默记入水位线；汇报只是请求审批，巡检不得自行批准或合流。
 
@@ -39,20 +42,32 @@
 
 `state` 支持 `OPEN`、`CLOSED`、`MERGED`，缺失时按 `OPEN` 处理。`checks_state` 支持空、`UNKNOWN`、`SUCCESS`、`FAILURE`、`FAILED`、`ERROR`、`EXPECTED`、`PENDING`、`QUEUED`、`IN_PROGRESS`、`TIMED_OUT`、`CANCELLED`、`ACTION_REQUIRED`、`STARTUP_FAILURE`、`STALE`、`NEUTRAL`、`SKIPPED`；`review_decision` 支持空、`UNKNOWN`、`APPROVED`、`CHANGES_REQUESTED`、`REQUEST_CHANGES`、`REVIEW_REQUIRED`；`mergeable` 支持空、`UNKNOWN`、`MERGEABLE`、`CONFLICTING`、`CONFLICT`。这些状态值使用 ASCII 字符，大小写不敏感；总体决议中的 `REQUEST_CHANGES` 视同 `CHANGES_REQUESTED`。除明确允许的缺省值和尚未生成的 `checks_state` 外，快照必需字段缺失属于契约违例。
 
+采集 GitHub `reviewDecision` 时，核对目标分支保护的 `Require a pull request before merging` 和 `Require approvals` 设置，或提供同等审批要求的规则集。分支未要求审批时，平台可能返回空的总体决议。采集方应依据完整快照明确提交这个空值。
+
+快照包含 `number`、`head_sha`、`review_decision`、`mergeable`、`comments` 和 `reviews`。评论和评审列表经完整采集后可以明确为空。`repo` 在多仓巡检中必填，单仓可按前文使用回退键。`state` 和尚未生成的 `checks_state` 适用上文的缺省规则。
+
 平台的单 PR 瞬态未知或尚未就绪状态（例如 `mergeable: UNKNOWN`、`checks_state: PENDING` 或 `checks_state` 尚未生成）仅影响该 PR：条目输出 `action: "observe"`、`requires_watch: true`，并在 `reasons` 中记录原因；其他 PR 正常派发。顶层 `status` 按所有其他情况正常汇总：有可跟进动作或待看护项时为 `attention_required`，否则为 `idle`。检查为 `SUCCESS`、复审为 `APPROVED` 或空、合并状态为 `MERGEABLE` 时才算稳定，未处理事件仍需看护；首次达到时的未处理事件属于合流准入节点，须先汇报，见“委托治理边界”。快照字段缺失（上述明确的缺省及尚未生成情况除外）、类型错误（例如应为字符串、布尔值或列表的字段类型不符）、快照状态字段非 ASCII、首尾空白或枚举越界属于对账完整性 `unknown`，而非平台瞬态状态；评审 `state` 的判定范围见下文。
 
 PR `head_sha` 和评审 `head_sha` 的合法标识符标准为非空且匹配 `^[!-~]+$`，不得含空白或控制字符。`reviews` 条目的 `head_sha` 表示评审针对的提交。作者 `login` 与可信白名单条目在比对及分组前均去除首尾 ASCII 空白字符（空格、`\t`、`\r`、`\n`），要求结果为非空纯 ASCII 字符串，再转 ASCII 小写，禁止 Unicode `casefold`；白名单按逗号切分，空白或含非 ASCII 字符的条目不生效。评论作者 `login` 无效时仅视为不可信评论。
 
+GitHub 采集方应填入被审提交的完整 commit OID。若强推后原提交对象不可读，平台可能把评审的 `commit.oid` 返回为 `null`。保留该缺口，按下文判断是否应归 `unknown`；需要人工核实时，查原评审及提交记录，并保留核对依据。
+
 评审 `state` 仅接受 ASCII，大小写不敏感；已知状态和完整性检查前先将兼容别名 `REQUEST_CHANGES` 规范化为 `CHANGES_REQUESTED`。已知决定性状态为 `APPROVED`、`CHANGES_REQUESTED`、`DISMISSED`，已知非决定性状态为 `COMMENTED`、`PENDING`。按输入顺序和规范化的 `login` 分组，只有已知决定性状态更新该评审者的最新有效决定性评审。对每个可信评审者，若其最后一条已知决定性评审之后存在 `state` 不在上述已知枚举内的评审（包括最新一条评审），对账完整性判为 `unknown`；若此前没有已知决定性评审，则检查该评审者的全部评审。后续 `COMMENTED` 或 `PENDING` 不会消除先前的未知状态；后续已知决定性评审可以取代此前的未知状态。
 
-可信评审触发当前 head 的修复候选，须同时满足 PR 总体 `review_decision` 为 `CHANGES_REQUESTED`（包括兼容别名 `REQUEST_CHANGES`）、该可信评审者最新有效决定性评审为 `CHANGES_REQUESTED`，且该评审的 `head_sha` 与当前 PR `head_sha` 一致。仅当前两项成立时，该评审的 `head_sha` 缺失或不符合合法标识符标准，才因此判为对账完整性 `unknown`；格式合法但不同于当前 PR `head_sha` 的历史变更请求不判 `unknown`，也不作为当前 head 的评审修复触发源。已被同一可信评审者后续决定性评审取代的旧评审，或格式合法但指向旧 `head_sha` 的历史评审，不作为当前 head 的评审修复触发源。非可信用户和非决定性评审的 `head_sha` 缺失或为 `null` 不阻断其他合规评审者的派发；已被同一可信评审者后续决定性评审取代的旧评审也不因其 `head_sha` 无效而阻断。
+可信评审触发当前 head 的修复候选，须同时满足 PR 总体 `review_decision` 为 `CHANGES_REQUESTED`（包括兼容别名 `REQUEST_CHANGES`）、该可信评审者最新有效决定性评审为 `CHANGES_REQUESTED`，且该评审的 `head_sha` 与当前 PR `head_sha` 完全一致（逐字符相等）。仅当前两项成立时，该评审的 `head_sha` 缺失或不符合合法标识符标准，才因此判为对账完整性 `unknown`；格式合法但不同于当前 PR `head_sha` 的历史变更请求不判 `unknown`，也不作为当前 head 的评审修复触发源。已被同一可信评审者后续决定性评审取代的旧评审，或格式合法但指向旧 `head_sha` 的历史评审，不作为当前 head 的评审修复触发源。非可信用户和非决定性评审的 `head_sha` 缺失或为 `null` 不阻断其他合规评审者的派发；已被同一可信评审者后续决定性评审取代的旧评审也不因其 `head_sha` 无效而阻断。结构合规的非触发评审（包括非可信作者和旧 head 的评审）仍作为事件进入看护。
 
 采集方须按时间正序翻完所有分页，提供完整评审和评论列表，不可逆序或截断。每条评审和评论须有非空标量 `id` 和字符串 `body`；非空标量指非空字符串或整数，排除布尔值。事件 `id` 先转为字符串，须为单行可打印 ASCII，不含首尾空白或控制字符；去重使用仓库、PR 编号、事件类型（评审或评论）及该字符串组成的键，缺少仓库名时沿用单仓回退规则。同一类型中整数和字符串形式的相同 `id` 视为同一事件，不同类型的相同 `id` 分别保留。参与决议或触发判定的已提交事件，其时间戳须非空，按输入顺序非递减（允许相等），以 ISO-8601 解析后的 UTC 时刻比较：评审取 `submitted_at`，评论取 `created_at`。
 
+快照中的评审和评论来源键为 `<repo>#<n>:<type>:<id>`，单仓回退为 `<n>:<type>:<id>`。同一来源键对应冲突内容时，保留 `unknown`。部署映射可以使用绑定 head 的看护记录键。读写方应沿用该映射的持久键，变更键格式前核对既有水位线和迁移顺序。
+
 以下情况属于对账完整性 `unknown`：数据结构或标识符契约违例（包括缺失或无效的事件 `id`、缺失或非字符串的 `body`、无效的 PR `head_sha`，或非 `null` 且不匹配 `^[!-~]+$`（或含换行）的 `repo`）、分页未取完等不完整信号、参与判定的已提交事件时间戳缺失、无效或乱序、未知活动进程或读取失败。总体决议为 `CHANGES_REQUESTED` 或 `REQUEST_CHANGES` 时评审作者无效，或单条 `CHANGES_REQUESTED` 评审的作者无效，均判为 `unknown`；非变更请求下评审作者无效仅视为不可信，不判 `unknown`。
 
-对账完整性 `unknown` 使本轮巡检顶层 `status` 置为 `unknown`，回滚本轮全部水位线预留，并将所有非 `circuit_breaker_escalate` 条目的 `action` 置为 `blocked_unknown`，阻止自动派发；保留已触发的 `circuit_breaker_escalate` 与 `circuit_broken: true` 人工升级告警。
+PR 快照缺少 `head_sha` 或值无效时，该快照不产生输出条目。对账完整性诊断保留对应 PR 编号，其他快照继续校验。
+
+同一 PR 键重复属于对账完整性 `unknown`。该键已有输出条目时，标记为 `blocked_unknown`，并设置 `circuit_broken: false`。已使用的修复轮次和已记录的 head 均保留。
+
+对账完整性 `unknown` 使本轮巡检顶层 `status` 置为 `unknown`，回滚本轮全部水位线预留，阻止自动派发。本轮只出现一次的 PR 键仍适用原熔断条件：可信的合并冲突，或达到轮次上限后由可信 CI 确认的新 head 失败，均可独立升级。仅由评审确认的新 head 失败须有完整的 PR 快照和评审证据。保留这些已确认的 `circuit_breaker_escalate` 与 `circuit_broken: true` 告警，其余输出条目标记为 `blocked_unknown`。
 
 ## 输出契约
 
-`scripts/pr-watch/schema.json` 校验版本 1 的对账输出和持久状态；快照输入的契约见上文，不由该 schema 校验。新输出的每个 PR 条目均须包含字符串数组 `reasons`；为兼容历史版本 1 输出，schema 允许省略该字段，出现时仍须为字符串数组。输出条目的 `repo` 为 `null` 或非空可见 ASCII 字符串，匹配 `^[!-~]+$` 且不得含换行。持久状态的 `prs` 键须全部为正整数编号，或全部为非空可见 ASCII 仓库名加 `#` 和正整数编号；空映射也有效。顶层状态保留 `degraded_unknown` 以兼容既有输出，对账完整性未知的新输出使用 `unknown`；消费方读到 `degraded_unknown` 时须与 `unknown` 等同处理，一律阻断自动动作。对象允许增加字段，以支持生产者扩展；已声明字段仍需符合其类型及约束。自检目前检查示例的严格 JSON 语法，完整 schema 校验尚待后续实现。
+`scripts/pr-watch/schema.json` 校验版本 1 的对账输出和持久状态；快照输入的契约见上文，不由该 schema 校验。新输出的每个 PR 条目均须包含字符串数组 `reasons`。历史版本 1 允许省略该字段，消费方遇到省略时读取为 `[]`，显式提供时须为字符串数组。输出条目的 `head_sha` 为非空可见 ASCII 字符串，`repo` 还可为 `null`。持久状态的 `prs` 键须全部为正整数编号，或全部为非空可见 ASCII 仓库名加 `#` 和正整数编号；空映射也有效。版本 1 顶层状态接受 `ok` 和 `idle`，消费方应结合 `window_state.is_window_idle` 判断本窗口是否空闲，并依据 `can_pause_routine` 判断是否可暂停。对账完整性未知的新输出使用 `unknown`；消费方读到历史 `degraded_unknown` 时须与 `unknown` 等同处理，一律阻断自动动作。对象允许增加字段，以支持生产者扩展；已声明字段仍需符合其类型及约束。自检目前检查示例的严格 JSON 语法，完整 schema 校验尚待后续实现。
