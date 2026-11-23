@@ -4,7 +4,7 @@
 
 运行离线回归：`PYTHONDONTWRITEBYTECODE=1 python3 selftest.py`。测试禁止 socket，HTTP 使用注入的假发送器；file 模式只写测试临时目录。
 
-HTTP 首次接入必须显式选择 --start-at-end 或 --allow-history；有 cursor 或末尾接入 pending 时拒绝 --allow-history。只有 HTTP 的显式历史扫描写历史选择日志。已有 cursor 的日常重启不带接入参数；末尾接入 pending 时也可无参数续跑。若写入绑定后、首次 ingest 前中断，既无 cursor 也无 pending，须用原来的 --start-at-end 或 --allow-history 重启，状态目录、账本、路由配置和运行模式与原绑定一致。
+HTTP 首次接入必须显式选择 `--start-at-end` 或 `--allow-history`。只有 HTTP 的显式历史扫描写历史选择日志。已有 cursor 或末尾接入 pending 时用无参数续跑，`--allow-history` 会被拒绝。若写入绑定后、首次 ingest 前中断，且没有 cursor 或 pending，重启时沿用原状态目录、账本、路由配置和运行模式。首次启动显式选择过接入参数时，重启沿用该参数。file 或 dry-run 首次启动未显式选择时，重启带 `--allow-history`，从文件头恢复原历史扫描。改用 `--start-at-end` 会跳过已有记录。
 
 生产对账要求检查当天之前最近两个完整 UTC+08:00 自然日，且必须满足事件、每助手、别名、旧回报和场景证据门槛；其他窗口只能 --diagnostic，不能生产放行。别名和必需助手名单全部由 --policy 读取。
 
@@ -39,4 +39,6 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tools/run-done-watcher
 
 ## 心跳告警排障
 
-检查心跳输出的 `reason` 与 watcher 状态：对失败运行待处理（`failed_pending`）检查投递失败原因并完成补报，对未确认的账本异常（`unreviewed_anomalies`）保留现场并排查。核实历史累计异常后，先停止持有该状态目录的常驻 watcher。沿用原账本、配置、运行模式、状态目录和每个 `--ignore-agent` 值，以 `--once --ack-anomalies` 确认累计异常。原始累计计数保留，待投递事件仍按常规投递和重试流程处理。重新运行心跳检查，确认 `ok: true` 后再恢复常驻 watcher 和定时检查。
+按心跳检查的 `reason` 和 `heartbeat.json` 排查。遇到待处理的投递失败（`failed_pending`），先修正失败原因。准备确认账本异常（`unreviewed_anomalies`）时，保留现场并停止持有该状态目录的常驻 watcher，再核实停机后最终的累计异常计数，包括停机前新增的异常。全部核实后，沿用原账本、配置、运行模式、状态目录和每个 `--ignore-agent` 值，以 `--once --ack-anomalies` 确认累计异常。原始累计计数保留。
+
+若单次运行后仍有待重试的投递，修正失败原因并等到退避到期，再用同一配置运行一次 `--once`。新异常先单独核实，`--ack-anomalies` 只用于确认已经核实的累计异常。重跑心跳检查，确认 `ok: true` 后再恢复常驻 watcher 和定时检查。

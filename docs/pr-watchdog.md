@@ -62,7 +62,7 @@ GitHub 采集方应填入被审提交的完整 commit OID。若强推后原提�
 
 以下情况属于对账完整性 `unknown`：数据结构或标识符契约违例（包括缺失或无效的事件 `id`、缺失或非字符串的 `body`、无效的 PR `head_sha`，或非 `null` 且不匹配 `^[!-~]+$`（或含换行）的 `repo`）、分页未取完等不完整信号、参与判定的已提交事件时间戳缺失、无效或乱序、未知活动进程或读取失败。总体决议为 `CHANGES_REQUESTED` 或 `REQUEST_CHANGES` 时评审作者无效，或单条 `CHANGES_REQUESTED` 评审的作者无效，均判为 `unknown`；非变更请求下评审作者无效仅视为不可信，不判 `unknown`。
 
-对账完整性 `unknown` 使本轮巡检顶层 `status` 置为 `unknown`，回滚本轮全部水位线预留，并将所有非 `circuit_breaker_escalate` 条目的 `action` 置为 `blocked_unknown`，阻止自动派发；保留已触发的 `circuit_breaker_escalate` 与 `circuit_broken: true` 人工升级告警。
+同一 PR 键重复属于对账完整性 `unknown`。该键已有输出条目时，标记为 `blocked_unknown`，并设置 `circuit_broken: false`。对账完整性 `unknown` 使本轮巡检顶层 `status` 置为 `unknown`，回滚本轮全部水位线预留，阻止自动派发。其他 PR 独立确认的 `circuit_breaker_escalate` 与 `circuit_broken: true` 人工升级告警继续保留，其余输出条目标记为 `blocked_unknown`。
 
 ## 输出契约
 
