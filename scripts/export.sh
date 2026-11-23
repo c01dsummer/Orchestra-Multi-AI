@@ -19,6 +19,8 @@ root = Path(sys.argv[1]).resolve()
 output = Path(sys.argv[2])
 # Every exported file is explicitly approved; never recurse through local directories.
 public = ("docs/pr-watchdog.md", "scripts/pr-watch/schema.json",
+          "scripts/pr-watch/README.md", "scripts/pr-watch/platform.mjs", "scripts/pr-watch/transport.mjs",
+          "scripts/pr-watch/workflow.mjs", "scripts/pr-watch/platform.test.mjs", "scripts/pr-watch/workflow.test.mjs",
           "examples/pr-watch/sample-events.jsonl", "examples/pr-watch/sample-reconcile-output.json",
           "README.md", "SKILL.md", "CHANGELOG.md", "LICENSE", ".gitignore",
           ".github/workflows/format-check.yml",
